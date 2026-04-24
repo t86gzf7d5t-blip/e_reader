@@ -1,0 +1,16 @@
+{
+  "characterId": "character_a",
+  "displayName": "Character A",
+  "role": "dad",
+  "style": "cozy_watercolor",
+  "defaultPosition": "bottomLeft",
+  "scale": 0.22,
+  "animations": {
+    "IDLE": { "frames": ["IDLE_1.png", "IDLE_2.png"], "fps": 4, "loop": true },
+    "WAVE": { "frames": ["WAVE.png"], "fps": 6, "loop": false },
+    "WOBBLE": { "frames": ["WOBBLE.png"], "fps": 6, "loop": false },
+    "WIND_GUST": { "frames": ["WIND_GUST.png"], "fps": 6, "loop": false },
+    "PETAL_RAIN": { "frames": ["PETAL_RAIN.png"], "fps": 6, "loop": false },
+    "TEA_TIME": { "frames": ["TEA_TIME.png"], "fps": 6, "loop": false }
+  }
+}

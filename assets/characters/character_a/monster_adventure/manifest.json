@@ -1,0 +1,16 @@
+{
+  "characterId": "character_a",
+  "displayName": "Character A",
+  "role": "dad",
+  "style": "monster_adventure",
+  "defaultPosition": "bottomLeft",
+  "scale": 0.22,
+  "animations": {
+    "IDLE": { "frames": ["IDLE_1.png", "IDLE_2.png"], "fps": 4, "loop": true },
+    "WAVE": { "frames": ["WAVE.png"], "fps": 6, "loop": false },
+    "WOBBLE": { "frames": ["WOBBLE.png"], "fps": 6, "loop": false },
+    "WATER_GUN": { "frames": ["WATER_GUN.png"], "fps": 6, "loop": false },
+    "FIREBALL": { "frames": ["FIREBALL.png"], "fps": 6, "loop": false },
+    "THUNDER_SHOCK": { "frames": ["THUNDER_SHOCK.png"], "fps": 6, "loop": false }
+  }
+}

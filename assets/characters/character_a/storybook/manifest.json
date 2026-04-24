@@ -1,0 +1,15 @@
+{
+  "characterId": "character_a",
+  "displayName": "Character A",
+  "role": "dad",
+  "style": "storybook",
+  "defaultPosition": "bottomLeft",
+  "scale": 0.22,
+  "animations": {
+    "IDLE": { "frames": ["IDLE_1.png", "IDLE_2.png"], "fps": 4, "loop": true },
+    "WAVE": { "frames": ["WAVE.png"], "fps": 6, "loop": false },
+    "WOBBLE": { "frames": ["WOBBLE.png"], "fps": 6, "loop": false },
+    "ANNOYED": { "frames": ["ANNOYED.png"], "fps": 5, "loop": false },
+    "RETURN": { "frames": ["RETURN_1.png", "RETURN_2.png"], "fps": 6, "loop": false }
+  }
+}

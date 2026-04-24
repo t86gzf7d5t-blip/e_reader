@@ -1,0 +1,50 @@
+name: e_reader
+description: "A storybook reader app for kids with animated characters."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  url_launcher: ^6.2.5
+  file_picker: ^8.0.0
+  path_provider: ^2.1.2
+  shared_preferences: ^2.2.2
+  epubx: ^4.0.0
+  archive: ^3.4.10
+  flutter_html: ^3.0.0-beta.2
+  webview_flutter: ^4.8.0
+  pdfx: ^2.6.0
+  path: ^1.8.3
+  flutter_inappwebview: ^6.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/books/
+    - assets/books/story_1/
+    - assets/characters/
+    - assets/characters/placeholder/
+    - assets/characters/character_a/storybook/
+    - assets/characters/character_a/monster_adventure/
+    - assets/characters/character_a/ninja_anime/
+    - assets/characters/character_a/cozy_watercolor/
+    - assets/characters/character_b/storybook/
+    - assets/characters/character_b/monster_adventure/
+    - assets/characters/character_b/ninja_anime/
+    - assets/characters/character_b/cozy_watercolor/
+    - assets/imported/
+    - assets/backgrounds/
+    - assets/reader/
+    - assets/reader/index.html

@@ -1,0 +1,2302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EPUB Reader</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            background: #f4f0e8;
+        }
+
+        #viewer {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            position: relative;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 180ms ease;
+        }
+
+        #viewer.reader-visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        #loadingOverlay {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background:
+                radial-gradient(circle at top, rgba(255, 255, 255, 0.9), rgba(244, 240, 232, 0.96) 40%),
+                linear-gradient(180deg, #f7f2e8 0%, #efe7d6 100%);
+            transition: opacity 180ms ease, visibility 180ms ease;
+        }
+
+        #loadingOverlay.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        .loading-card {
+            width: min(420px, calc(100vw - 48px));
+            padding: 28px 24px;
+            border-radius: 24px;
+            background: rgba(255, 252, 247, 0.95);
+            border: 1px solid rgba(85, 67, 44, 0.08);
+            box-shadow: 0 18px 50px rgba(63, 46, 26, 0.12);
+            font-family: system-ui, -apple-system, sans-serif;
+            color: #3f3327;
+        }
+
+        .loading-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .loading-spinner {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            border: 3px solid rgba(188, 145, 90, 0.22);
+            border-top-color: #bc915a;
+            animation: reader-spin 0.9s linear infinite;
+            flex: 0 0 auto;
+        }
+
+        .loading-copy {
+            min-width: 0;
+        }
+
+        .loading-title {
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+        }
+
+        .loading-detail {
+            margin-top: 4px;
+            font-size: 14px;
+            line-height: 1.4;
+            color: #6d5c47;
+        }
+
+        .loading-progress {
+            margin-top: 18px;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(87, 68, 42, 0.08);
+            overflow: hidden;
+        }
+
+        .loading-progress-bar {
+            height: 100%;
+            width: 0%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, #d59b4d 0%, #bc915a 100%);
+            transition: width 180ms ease;
+        }
+
+        #status,
+        #debug {
+            display: none;
+        }
+
+        @keyframes reader-spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="viewer"></div>
+    <div id="loadingOverlay">
+        <div class="loading-card">
+            <div class="loading-row">
+                <div class="loading-spinner" id="loadingSpinner"></div>
+                <div class="loading-copy">
+                    <div class="loading-title" id="loadingTitle">Opening book</div>
+                    <div class="loading-detail" id="loadingDetail">Preparing the reader...</div>
+                </div>
+            </div>
+            <div class="loading-progress">
+                <div class="loading-progress-bar" id="loadingProgressBar"></div>
+            </div>
+        </div>
+    </div>
+    <div id="status" aria-hidden="true"></div>
+    <div id="debug" aria-hidden="true"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.88/dist/epub.min.js"></script>
+    
+    <script>
+        let book = null;
+        let rendition = null;
+        let currentLocation = null;
+        let isReady = false;
+        let locationsReady = false;
+        
+        let currentPage = 1;
+        let totalPages = 0;
+        let isSpreadMode = false;
+        let lastReportedCfi = null;
+        let pageMap = [];
+        let pageMapInfos = [];
+        let pageMapLocationHints = [];
+        let cachedPageMaps = {
+            single: null,
+            spread: null
+        };
+        let isBuildingPageMap = false;
+        let pendingRestoreCfi = null;
+        let suppressReportingUntilCfi = null;
+        let pendingSuppressReportReset = null;
+        let pendingPaginationRebuild = null;
+        const locationWaiters = [];
+        let navigationInFlight = false;
+        let pendingNavigationReset = null;
+        let pendingReportedPage = null;
+        let pendingRestorePageHint = null;
+        let pendingRestoreTotalHint = null;
+        let lastNavigationAt = 0;
+        let currentLayoutKey = 'single';
+        let lastResolvedPage = 1;
+        let lastStableReportedCfi = null;
+        let layoutTransitionTargetCfi = null;
+        let pendingLayoutTransitionReset = null;
+        let layoutTransitionRetryCount = 0;
+        let layoutTransitionToken = 0;
+        let postLayoutSettleAnchorCfi = null;
+        let postLayoutSettleUntil = 0;
+        let currentBookCacheNamespace = null;
+        let currentFontSizePx = 18;
+        let pendingSafeRegionReport = null;
+        const PAGINATION_CACHE_VERSION = 1;
+        const LOCATION_CHANGE_TIMEOUT_MS = 900;
+        const PAGE_MAP_LAYOUT_SETTLE_MS = 90;
+        const NEXT_LOCATION_RETRY_DELAY_MS = 60;
+        const LAYOUT_SWITCH_SETTLE_TIMEOUT_MS = 1400;
+        const POST_LAYOUT_SETTLE_GUARD_MS = 900;
+        const MAX_LAYOUT_SWITCH_RETRIES = 2;
+        const PRECISE_PAGE_MAP_MAX_LOCATIONS = 350;
+        const PRECISE_PAGE_MAP_MAX_SPINE_ITEMS = 6;
+        const DEBUG_OVERLAY = false;
+        
+        // Report page to Flutter with validation
+        function reportPage(page, total, cfi) {
+            if (!Number.isFinite(page) || !Number.isFinite(total) || total === 0) {
+                console.log('>>> Skipping invalid page:', { page, total, cfi });
+                return;
+            }
+            const validPage = Math.max(1, Math.min(Math.round(page), total));
+            console.log('>>> Page:', validPage, '/', total);
+            FlutterBridge.onPageChanged(validPage, total, cfi);
+        }
+
+        function getCurrentCfiFromLocation(location) {
+            if (!location) return null;
+            if (typeof location.start === 'string') return location.start;
+            if (location.start && typeof location.start.cfi === 'string') return location.start.cfi;
+            return null;
+        }
+
+        function getLinearSpineItems() {
+            if (!book || !book.spine) {
+                return [];
+            }
+
+            try {
+                const spineItems = book.spine.spineItems || book.spine.items || [];
+                return spineItems.filter(function(item) {
+                    return !!item;
+                });
+            } catch (error) {
+                console.error('Failed to resolve spine items:', error);
+                return [];
+            }
+        }
+
+        function getSpineItemTarget(item) {
+            if (!item) {
+                return null;
+            }
+
+            return item.href || item.url || null;
+        }
+
+        function getLayoutKey() {
+            return isSpreadMode ? 'spread' : 'single';
+        }
+
+        function getAllLocationCount() {
+            if (!book || !book.locations) {
+                return 0;
+            }
+
+            if (typeof book.locations.length === 'function') {
+                return book.locations.length();
+            }
+
+            return Number(book.locations.length) || 0;
+        }
+
+        function applyLayoutMode(layoutKey) {
+            const useSpread = layoutKey === 'spread';
+            isSpreadMode = useSpread;
+            if (rendition) {
+                rendition.spread(useSpread ? 'auto' : 'none');
+            }
+            currentLayoutKey = layoutKey;
+        }
+
+        function setActivePageMap(layoutKey) {
+            const cached = cachedPageMaps[layoutKey];
+            if (!cached) {
+                return false;
+            }
+
+            pageMap = cached.pageMap.slice();
+            pageMapInfos = cached.pageMapInfos.slice();
+            pageMapLocationHints = cached.pageMapLocationHints.slice();
+            currentLayoutKey = layoutKey;
+            totalPages = getCanonicalTotalPages();
+            return true;
+        }
+
+        function getCanonicalPageCache() {
+            const single = cachedPageMaps.single;
+            const spread = cachedPageMaps.spread;
+            const singleCount = single ? single.pageMap.length : 0;
+            const spreadCount = spread ? spread.pageMap.length : 0;
+
+            if (singleCount > 0 && (spreadCount === 0 || singleCount >= spreadCount)) {
+                return single;
+            }
+
+            return null;
+        }
+
+        function getCanonicalTotalPages() {
+            const canonical = getCanonicalPageCache();
+            if (canonical && canonical.pageMap.length > 0) {
+                return Math.max(1, canonical.pageMap.length);
+            }
+
+            return Math.max(1, getAllLocationCount() || pageMap.length || totalPages || 1);
+        }
+
+        function shouldBuildPrecisePageMaps() {
+            if (cachedPageMaps.single || cachedPageMaps.spread) {
+                return true;
+            }
+
+            const allLocationCount = getAllLocationCount();
+            const spineCount = getLinearSpineItems().length;
+
+            if (allLocationCount > PRECISE_PAGE_MAP_MAX_LOCATIONS) {
+                return false;
+            }
+
+            if (spineCount > PRECISE_PAGE_MAP_MAX_SPINE_ITEMS) {
+                return false;
+            }
+
+            return true;
+        }
+
+        function scaleDisplayedPageToCanonical(displayedPage, displayedTotal, canonicalTotal) {
+            if (!Number.isFinite(displayedPage) || !Number.isFinite(displayedTotal) || displayedTotal <= 0) {
+                return null;
+            }
+
+            if (displayedTotal === 1) {
+                return 1;
+            }
+
+            const maxStartPage = currentLayoutKey === 'spread' && canonicalTotal > 1
+                ? canonicalTotal - 1
+                : canonicalTotal;
+            const scaledPage = Math.round(
+                ((displayedPage - 1) / (displayedTotal - 1)) * Math.max(0, maxStartPage - 1)
+            ) + 1;
+
+            return Math.max(1, Math.min(maxStartPage, scaledPage));
+        }
+
+        function setViewerVisible(isVisible) {
+            const viewer = document.getElementById('viewer');
+            if (!viewer) {
+                return;
+            }
+
+            if (isVisible) {
+                viewer.classList.add('reader-visible');
+            } else {
+                viewer.classList.remove('reader-visible');
+            }
+        }
+
+        function setLoadingState(title, detail, progress, options) {
+            const overlay = document.getElementById('loadingOverlay');
+            const titleNode = document.getElementById('loadingTitle');
+            const detailNode = document.getElementById('loadingDetail');
+            const progressBar = document.getElementById('loadingProgressBar');
+            const spinner = document.getElementById('loadingSpinner');
+            const isError = !!(options && options.isError);
+
+            if (titleNode && title) {
+                titleNode.textContent = title;
+            }
+
+            if (detailNode) {
+                detailNode.textContent = detail || '';
+            }
+
+            if (progressBar) {
+                const safeProgress = Number.isFinite(progress)
+                    ? Math.max(0, Math.min(1, progress))
+                    : 0;
+                progressBar.style.width = Math.round(safeProgress * 100) + '%';
+                progressBar.style.background = isError
+                    ? 'linear-gradient(90deg, #d65c47 0%, #b33f2a 100%)'
+                    : 'linear-gradient(90deg, #d59b4d 0%, #bc915a 100%)';
+            }
+
+            if (spinner) {
+                spinner.style.display = isError ? 'none' : 'block';
+            }
+
+            if (overlay) {
+                overlay.classList.remove('hidden');
+            }
+        }
+
+        function hideLoadingState() {
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) {
+                overlay.classList.add('hidden');
+            }
+        }
+
+        function rectsIntersect(left, right) {
+            return !(
+                left.right <= right.left ||
+                left.left >= right.right ||
+                left.bottom <= right.top ||
+                left.top >= right.bottom
+            );
+        }
+
+        function clampRegion(region) {
+            const x = Math.max(0.02, Math.min(0.96, region.x));
+            const y = Math.max(0.02, Math.min(0.96, region.y));
+            const width = Math.max(0, Math.min(0.96 - x, region.width));
+            const height = Math.max(0, Math.min(0.96 - y, region.height));
+            if (width < 0.07 || height < 0.07) {
+                return null;
+            }
+            return { x: x, y: y, width: width, height: height };
+        }
+
+        function collectCandidateSafeRegions(occupied) {
+            const normalized = occupied.map(function(rect) {
+                return {
+                    left: rect.left / window.innerWidth,
+                    top: rect.top / window.innerHeight,
+                    right: rect.right / window.innerWidth,
+                    bottom: rect.bottom / window.innerHeight
+                };
+            });
+
+            function boundsForRange(minX, maxX) {
+                const scoped = normalized.filter(function(rect) {
+                    const centerX = (rect.left + rect.right) / 2;
+                    return centerX >= minX && centerX <= maxX;
+                });
+
+                if (scoped.length === 0) {
+                    return null;
+                }
+
+                return scoped.reduce(function(acc, rect) {
+                    return {
+                        left: Math.min(acc.left, rect.left),
+                        top: Math.min(acc.top, rect.top),
+                        right: Math.max(acc.right, rect.right),
+                        bottom: Math.max(acc.bottom, rect.bottom)
+                    };
+                });
+            }
+
+            const candidates = [];
+
+            function pushRegion(region) {
+                const clamped = clampRegion(region);
+                if (!clamped) {
+                    return;
+                }
+
+                const duplicate = candidates.some(function(existing) {
+                    return Math.abs(existing.x - clamped.x) < 0.03 &&
+                        Math.abs(existing.y - clamped.y) < 0.03 &&
+                        Math.abs(existing.width - clamped.width) < 0.04 &&
+                        Math.abs(existing.height - clamped.height) < 0.04;
+                });
+
+                if (!duplicate) {
+                    candidates.push(clamped);
+                }
+            }
+
+            [
+                { minX: 0.0, maxX: 0.5 },
+                { minX: 0.5, maxX: 1.0 }
+            ].forEach(function(range) {
+                const bounds = boundsForRange(range.minX, range.maxX);
+                const laneLeft = range.minX + 0.03;
+                const laneRight = range.maxX - 0.03;
+
+                if (!bounds) {
+                    pushRegion({
+                        x: laneLeft,
+                        y: 0.08,
+                        width: laneRight - laneLeft,
+                        height: 0.80
+                    });
+                    return;
+                }
+
+                pushRegion({
+                    x: laneLeft,
+                    y: 0.05,
+                    width: Math.max(0.10, Math.min(0.26, bounds.left - laneLeft - 0.02)),
+                    height: Math.max(0.12, Math.min(0.28, bounds.top - 0.03))
+                });
+
+                pushRegion({
+                    x: laneLeft,
+                    y: Math.max(0.06, bounds.bottom + 0.02),
+                    width: Math.max(0.12, Math.min(0.26, bounds.left - laneLeft - 0.02)),
+                    height: 0.92 - Math.max(0.06, bounds.bottom + 0.02)
+                });
+
+                pushRegion({
+                    x: Math.max(laneLeft, bounds.right + 0.02),
+                    y: Math.max(0.08, bounds.top + 0.02),
+                    width: laneRight - Math.max(laneLeft, bounds.right + 0.02),
+                    height: Math.max(0.12, Math.min(0.34, bounds.bottom - bounds.top))
+                });
+
+                pushRegion({
+                    x: laneLeft,
+                    y: 0.05,
+                    width: laneRight - laneLeft,
+                    height: Math.max(0.10, bounds.top - 0.03)
+                });
+
+                pushRegion({
+                    x: laneLeft,
+                    y: Math.max(0.06, bounds.bottom + 0.02),
+                    width: laneRight - laneLeft,
+                    height: 0.92 - Math.max(0.06, bounds.bottom + 0.02)
+                });
+            });
+
+            pushRegion({ x: 0.03, y: 0.05, width: 0.16, height: 0.18 });
+            pushRegion({ x: 0.80, y: 0.70, width: 0.14, height: 0.18 });
+
+            return candidates;
+        }
+
+        function collectOccupiedTextRects() {
+            const iframe = rendition && rendition.manager && rendition.manager.container
+                ? rendition.manager.container.querySelector('iframe')
+                : null;
+            if (!iframe || !iframe.contentDocument) {
+                return [];
+            }
+
+            const iframeRect = iframe.getBoundingClientRect();
+            const doc = iframe.contentDocument;
+            const selectors = [
+                'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                'li', 'blockquote', 'pre', 'table', 'figure', 'img'
+            ];
+
+            const occupied = [];
+            selectors.forEach(function(selector) {
+                const nodes = doc.querySelectorAll(selector);
+                nodes.forEach(function(node) {
+                    const rect = node.getBoundingClientRect();
+                    const hasSize = rect.width > 24 && rect.height > 16;
+                    if (!hasSize) {
+                        return;
+                    }
+
+                    const style = doc.defaultView.getComputedStyle(node);
+                    if (style.visibility === 'hidden' || style.display === 'none') {
+                        return;
+                    }
+
+                    occupied.push({
+                        left: iframeRect.left + rect.left - 10,
+                        top: iframeRect.top + rect.top - 8,
+                        right: iframeRect.left + rect.right + 10,
+                        bottom: iframeRect.top + rect.bottom + 8
+                    });
+                });
+            });
+
+            return occupied;
+        }
+
+        function computeSafeRegions() {
+            const viewportRect = {
+                left: 0,
+                top: 0,
+                right: window.innerWidth,
+                bottom: window.innerHeight
+            };
+            const occupied = collectOccupiedTextRects();
+            const candidates = collectCandidateSafeRegions(occupied);
+
+            const scored = candidates.map(function(candidate) {
+                const rect = {
+                    left: candidate.x * viewportRect.right,
+                    top: candidate.y * viewportRect.bottom,
+                    right: (candidate.x + candidate.width) * viewportRect.right,
+                    bottom: (candidate.y + candidate.height) * viewportRect.bottom
+                };
+
+                let overlapCount = 0;
+                occupied.forEach(function(block) {
+                    if (rectsIntersect(rect, block)) {
+                        overlapCount += 1;
+                    }
+                });
+
+                return {
+                    x: candidate.x,
+                    y: candidate.y,
+                    width: candidate.width,
+                    height: candidate.height,
+                    overlapCount: overlapCount
+                };
+            });
+
+            scored.sort(function(left, right) {
+                if (left.overlapCount !== right.overlapCount) {
+                    return left.overlapCount - right.overlapCount;
+                }
+                return (right.width * right.height) - (left.width * left.height);
+            });
+
+            return scored
+                .filter(function(region) { return region.overlapCount === 0; })
+                .slice(0, 4)
+                .map(function(region) {
+                    return {
+                        x: region.x,
+                        y: region.y,
+                        width: region.width,
+                        height: region.height
+                    };
+                });
+        }
+
+        function queueSafeRegionReport() {
+            if (pendingSafeRegionReport) {
+                clearTimeout(pendingSafeRegionReport);
+            }
+
+            pendingSafeRegionReport = setTimeout(function() {
+                pendingSafeRegionReport = null;
+                const regions = computeSafeRegions();
+                if (regions.length > 0) {
+                    FlutterBridge.postMessage('safeRegions', { regions: regions });
+                }
+            }, 90);
+        }
+
+        function formatDurationMs(durationMs) {
+            if (!Number.isFinite(durationMs)) {
+                return 'unknown';
+            }
+
+            if (durationMs < 1000) {
+                return Math.round(durationMs) + 'ms';
+            }
+
+            return (durationMs / 1000).toFixed(2) + 's';
+        }
+
+        function logTiming(label, startedAt) {
+            const durationMs = performance.now() - startedAt;
+            console.log('>>> Timing:', label, formatDurationMs(durationMs));
+            return durationMs;
+        }
+
+        function getViewportCacheBucket() {
+            const widthBucket = Math.max(320, Math.round(window.innerWidth / 120) * 120);
+            const heightBucket = Math.max(320, Math.round(window.innerHeight / 120) * 120);
+            return widthBucket + 'x' + heightBucket;
+        }
+
+        function getPaginationCacheKey() {
+            if (!currentBookCacheNamespace) {
+                return null;
+            }
+
+            return [
+                'reader-pagination-v' + PAGINATION_CACHE_VERSION,
+                currentBookCacheNamespace,
+                'fs:' + Math.round(currentFontSizePx * 10),
+                'vp:' + getViewportCacheBucket()
+            ].join('|');
+        }
+
+        function validateCachedPageMap(candidate) {
+            if (!candidate ||
+                !Array.isArray(candidate.pageMap) ||
+                !Array.isArray(candidate.pageMapInfos) ||
+                !Array.isArray(candidate.pageMapLocationHints)
+            ) {
+                return null;
+            }
+
+            if (candidate.pageMap.length === 0) {
+                return null;
+            }
+
+            return {
+                pageMap: candidate.pageMap.slice(),
+                pageMapInfos: candidate.pageMapInfos.slice(),
+                pageMapLocationHints: candidate.pageMapLocationHints.slice()
+            };
+        }
+
+        function hydrateCachedPageMapsFromStorage() {
+            const cacheKey = getPaginationCacheKey();
+            if (!cacheKey || typeof localStorage === 'undefined') {
+                return false;
+            }
+
+            try {
+                const raw = localStorage.getItem(cacheKey);
+                if (!raw) {
+                    return false;
+                }
+
+                const parsed = JSON.parse(raw);
+                const single = validateCachedPageMap(parsed.single);
+                const spread = validateCachedPageMap(parsed.spread);
+
+                if (!single && !spread) {
+                    return false;
+                }
+
+                cachedPageMaps = {
+                    single: single,
+                    spread: spread
+                };
+
+                console.log(
+                    '>>> Restored cached pagination for',
+                    cacheKey,
+                    'single:',
+                    single ? single.pageMap.length : 0,
+                    'spread:',
+                    spread ? spread.pageMap.length : 0
+                );
+                return true;
+            } catch (error) {
+                console.error('Failed to restore cached pagination:', error);
+                return false;
+            }
+        }
+
+        function persistCachedPageMapsToStorage() {
+            const cacheKey = getPaginationCacheKey();
+            if (!cacheKey || typeof localStorage === 'undefined') {
+                return;
+            }
+
+            try {
+                localStorage.setItem(
+                    cacheKey,
+                    JSON.stringify({
+                        single: cachedPageMaps.single,
+                        spread: cachedPageMaps.spread
+                    })
+                );
+                console.log('>>> Saved cached pagination for', cacheKey);
+            } catch (error) {
+                console.error('Failed to persist cached pagination:', error);
+            }
+        }
+
+        function getLocationGenerationBreakSize() {
+            const spineCount = getLinearSpineItems().length;
+            if (spineCount >= 120) {
+                return 2600;
+            }
+            if (spineCount >= 80) {
+                return 2200;
+            }
+            if (spineCount >= 40) {
+                return 1800;
+            }
+            if (spineCount >= 20) {
+                return 1600;
+            }
+            if (spineCount >= 10) {
+                return 1000;
+            }
+            return 800;
+        }
+
+        function shouldDeferProgressPreparation() {
+            const spineCount = getLinearSpineItems().length;
+            if (spineCount < 20) {
+                return false;
+            }
+
+            const hasRestoreTarget = !!pendingRestoreCfi || pendingRestorePageHint !== null;
+            if (!hasRestoreTarget) {
+                return true;
+            }
+
+            const hasSavedProgressHint =
+                Number.isFinite(pendingRestorePageHint) &&
+                pendingRestorePageHint !== null &&
+                Number.isFinite(pendingRestoreTotalHint) &&
+                pendingRestoreTotalHint !== null;
+
+            if (hasSavedProgressHint) {
+                console.log(
+                    '>>> Deferring reading progress preparation for restored large book using saved progress hints'
+                );
+                return true;
+            }
+
+            if (pendingRestoreCfi) {
+                console.log(
+                    '>>> Keeping progress preparation blocking because restore has no saved page hints'
+                );
+            }
+
+            return false;
+        }
+
+        function parseCfiInfo(cfi) {
+            if (!cfi || typeof cfi !== 'string') {
+                return null;
+            }
+
+            const wrappedMatch = cfi.match(/^epubcfi\((.*)\)$/);
+            const raw = wrappedMatch ? wrappedMatch[1] : cfi;
+            const parts = raw.split('!');
+            const spine = parts[0] || '';
+            const contentWithOffset = parts[1] || '';
+            const path = contentWithOffset.split(':')[0];
+            const numbers = [];
+            const numberMatches = path.match(/\/(\d+)/g) || [];
+
+            for (const match of numberMatches) {
+                const value = parseInt(match.slice(1), 10);
+                if (Number.isFinite(value)) {
+                    numbers.push(value);
+                }
+            }
+
+            return {
+                spine: spine,
+                path: path,
+                numbers: numbers,
+            };
+        }
+
+        function compareNumberArrays(left, right) {
+            const maxLength = Math.max(left.length, right.length);
+            for (let i = 0; i < maxLength; i++) {
+                const leftValue = i < left.length ? left[i] : -1;
+                const rightValue = i < right.length ? right[i] : -1;
+                if (leftValue < rightValue) return -1;
+                if (leftValue > rightValue) return 1;
+            }
+            return 0;
+        }
+
+        function cfisMatch(left, right) {
+            if (!left || !right) {
+                return false;
+            }
+
+            if (left === right) {
+                return true;
+            }
+
+            const leftInfo = parseCfiInfo(left);
+            const rightInfo = parseCfiInfo(right);
+            return !!leftInfo &&
+                !!rightInfo &&
+                leftInfo.spine === rightInfo.spine &&
+                leftInfo.path === rightInfo.path;
+        }
+
+        function isNearCfi(left, right) {
+            const leftInfo = parseCfiInfo(left);
+            const rightInfo = parseCfiInfo(right);
+            if (!leftInfo || !rightInfo || leftInfo.spine !== rightInfo.spine) {
+                return false;
+            }
+
+            const leftHint = getLocationHintForCfi(left);
+            const rightHint = getLocationHintForCfi(right);
+            if (leftHint !== null && rightHint !== null) {
+                return Math.abs(leftHint - rightHint) <= 1;
+            }
+
+            return compareNumberArrays(leftInfo.numbers, rightInfo.numbers) === 0;
+        }
+
+        function getLocationHintForCfi(cfi) {
+            if (!cfi || !book || !book.locations || typeof book.locations.locationFromCfi !== 'function') {
+                return null;
+            }
+
+            try {
+                const resolvedIndex = book.locations.locationFromCfi(cfi);
+                return Number.isFinite(resolvedIndex) ? resolvedIndex : null;
+            } catch (error) {
+                console.error('Failed to resolve location from CFI:', error);
+                return null;
+            }
+        }
+
+        function getProgressForCfi(cfi) {
+            if (!cfi || !book || !book.locations) {
+                return null;
+            }
+
+            if (typeof book.locations.percentageFromCfi === 'function') {
+                try {
+                    const percentage = book.locations.percentageFromCfi(cfi);
+                    if (Number.isFinite(percentage)) {
+                        return Math.max(0, Math.min(1, percentage));
+                    }
+                } catch (error) {
+                    console.error('Failed to resolve percentage from CFI:', error);
+                }
+            }
+
+            const locationHint = getLocationHintForCfi(cfi);
+            const totalLocations = getAllLocationCount();
+            if (locationHint !== null && totalLocations > 1) {
+                return Math.max(0, Math.min(1, locationHint / (totalLocations - 1)));
+            }
+
+            return null;
+        }
+
+        function resolvePageNumberFromMap(currentCfi, currentInfo, locationHint, cache) {
+            if (!cache || !currentCfi || !cache.pageMap || cache.pageMap.length === 0) {
+                return null;
+            }
+
+            const cachedPageMap = cache.pageMap;
+            const cachedInfos = cache.pageMapInfos || [];
+            const cachedHints = cache.pageMapLocationHints || [];
+
+            const exactPageIndex = cachedPageMap.indexOf(currentCfi);
+            if (exactPageIndex >= 0) {
+                return exactPageIndex + 1;
+            }
+
+            if (currentInfo && cachedInfos.length === cachedPageMap.length) {
+                let bestSameSpineIndex = -1;
+
+                for (let i = 0; i < cachedInfos.length; i++) {
+                    const candidateInfo = cachedInfos[i];
+                    if (!candidateInfo || candidateInfo.spine !== currentInfo.spine) {
+                        continue;
+                    }
+
+                    if (compareNumberArrays(candidateInfo.numbers, currentInfo.numbers) <= 0) {
+                        bestSameSpineIndex = i;
+                    } else {
+                        break;
+                    }
+                }
+
+                if (bestSameSpineIndex >= 0) {
+                    return bestSameSpineIndex + 1;
+                }
+            }
+
+            if (locationHint !== null && cachedHints.length === cachedPageMap.length) {
+                let bestMatchIndex = 0;
+                for (let i = 0; i < cachedHints.length; i++) {
+                    const candidate = cachedHints[i];
+                    if (candidate === null) {
+                        continue;
+                    }
+
+                    if (candidate <= locationHint) {
+                        bestMatchIndex = i;
+                    } else {
+                        break;
+                    }
+                }
+
+                return bestMatchIndex + 1;
+            }
+
+            return null;
+        }
+
+        function consumeRestorePageHint(currentCfi, resolvedTotalPages, resolvedSource) {
+            if (pendingRestorePageHint === null || pendingRestoreTotalHint === null) {
+                return null;
+            }
+
+            const restoreCfiMatches = !pendingRestoreCfi ||
+                cfisMatch(currentCfi, pendingRestoreCfi) ||
+                isNearCfi(currentCfi, pendingRestoreCfi);
+
+            if (!restoreCfiMatches) {
+                return null;
+            }
+
+            const canTrustPageHint = resolvedSource !== 'map' && resolvedSource !== 'progress';
+            const canUseFirstPageHint = pendingRestorePageHint === 1;
+            const hint = canTrustPageHint &&
+                (pendingRestoreTotalHint === resolvedTotalPages || canUseFirstPageHint)
+                ? Math.max(1, Math.min(resolvedTotalPages, pendingRestorePageHint))
+                : null;
+
+            if (hint !== null) {
+                console.log('>>> Using restore page hint:', hint, 'for total', resolvedTotalPages);
+            } else if (!canTrustPageHint) {
+                console.log(
+                    '>>> Ignoring restore page hint because the CFI resolved cleanly via',
+                    resolvedSource
+                );
+            } else {
+                console.log(
+                    '>>> Ignoring restore page hint due to page-count mismatch:',
+                    pendingRestorePageHint,
+                    pendingRestoreTotalHint,
+                    resolvedTotalPages
+                );
+            }
+
+            pendingRestorePageHint = null;
+            pendingRestoreTotalHint = null;
+            return hint;
+        }
+
+        function notifyLocationWaiters(location) {
+            while (locationWaiters.length > 0) {
+                const resolve = locationWaiters.shift();
+                resolve(location);
+            }
+        }
+
+        function clearNavigationLock() {
+            navigationInFlight = false;
+            if (pendingNavigationReset) {
+                clearTimeout(pendingNavigationReset);
+                pendingNavigationReset = null;
+            }
+        }
+
+        function clearSuppressedReportingTarget() {
+            suppressReportingUntilCfi = null;
+            if (pendingSuppressReportReset) {
+                clearTimeout(pendingSuppressReportReset);
+                pendingSuppressReportReset = null;
+            }
+        }
+
+        function clearLayoutTransitionLock() {
+            layoutTransitionTargetCfi = null;
+            layoutTransitionRetryCount = 0;
+            layoutTransitionToken += 1;
+            if (pendingLayoutTransitionReset) {
+                clearTimeout(pendingLayoutTransitionReset);
+                pendingLayoutTransitionReset = null;
+            }
+        }
+
+        function clearPostLayoutSettleGuard() {
+            postLayoutSettleAnchorCfi = null;
+            postLayoutSettleUntil = 0;
+        }
+
+        function beginPostLayoutSettleGuard(anchorCfi) {
+            if (!anchorCfi) {
+                clearPostLayoutSettleGuard();
+                return;
+            }
+
+            postLayoutSettleAnchorCfi = anchorCfi;
+            postLayoutSettleUntil = Date.now() + POST_LAYOUT_SETTLE_GUARD_MS;
+        }
+
+        function beginLayoutTransition(targetCfi) {
+            clearLayoutTransitionLock();
+
+            if (!targetCfi) {
+                return;
+            }
+
+            layoutTransitionTargetCfi = targetCfi;
+            layoutTransitionRetryCount = 0;
+            const transitionToken = layoutTransitionToken;
+            pendingLayoutTransitionReset = setTimeout(async function() {
+                if (transitionToken !== layoutTransitionToken) {
+                    return;
+                }
+
+                const expectedCfi = layoutTransitionTargetCfi;
+                if (!expectedCfi) {
+                    return;
+                }
+
+                if (layoutTransitionRetryCount < MAX_LAYOUT_SWITCH_RETRIES && rendition) {
+                    layoutTransitionRetryCount += 1;
+                    console.log(
+                        '>>> Layout switch still unsettled; retrying target CFI',
+                        expectedCfi,
+                        'attempt',
+                        layoutTransitionRetryCount
+                    );
+                    suppressReportingUntil(expectedCfi, LAYOUT_SWITCH_SETTLE_TIMEOUT_MS);
+                    try {
+                        await rendition.display(expectedCfi);
+                    } catch (error) {
+                        console.error('Failed to retry layout transition target:', error);
+                    }
+
+                    if (transitionToken !== layoutTransitionToken) {
+                        return;
+                    }
+
+                    pendingLayoutTransitionReset = setTimeout(function() {
+                        if (transitionToken !== layoutTransitionToken) {
+                            return;
+                        }
+
+                        console.log(
+                            '>>> Layout switch settle timeout reached; accepting nearest current location for',
+                            expectedCfi
+                        );
+                        clearLayoutTransitionLock();
+                        clearSuppressedReportingTarget();
+                        clearPostLayoutSettleGuard();
+                        if (!isBuildingPageMap) {
+                            reportCurrentLocation();
+                        }
+                    }, LAYOUT_SWITCH_SETTLE_TIMEOUT_MS);
+                    return;
+                }
+
+                console.log(
+                    '>>> Layout switch settle timeout reached; accepting nearest current location for',
+                    expectedCfi
+                );
+                clearLayoutTransitionLock();
+                clearSuppressedReportingTarget();
+                clearPostLayoutSettleGuard();
+                if (!isBuildingPageMap) {
+                    reportCurrentLocation();
+                }
+            }, LAYOUT_SWITCH_SETTLE_TIMEOUT_MS);
+        }
+
+        function suppressReportingUntil(cfi, timeoutMs) {
+            clearSuppressedReportingTarget();
+
+            if (!cfi) {
+                return;
+            }
+
+            suppressReportingUntilCfi = cfi;
+            pendingSuppressReportReset = setTimeout(function() {
+                const expectedCfi = suppressReportingUntilCfi;
+                clearSuppressedReportingTarget();
+                console.log(
+                    '>>> Restore/report suppression timed out; using current location instead of waiting for',
+                    expectedCfi
+                );
+                if (!isBuildingPageMap) {
+                    reportCurrentLocation();
+                }
+            }, timeoutMs || 1200);
+        }
+
+        function queueNavigationReset() {
+            if (pendingNavigationReset) {
+                clearTimeout(pendingNavigationReset);
+            }
+
+            pendingNavigationReset = setTimeout(function() {
+                clearNavigationLock();
+            }, 1200);
+        }
+
+        function performNavigation(direction) {
+            if (!rendition || !isReady || isBuildingPageMap) {
+                return false;
+            }
+
+            const now = Date.now();
+            if (navigationInFlight || now - lastNavigationAt < 350) {
+                return false;
+            }
+
+            navigationInFlight = true;
+            lastNavigationAt = now;
+            queueNavigationReset();
+
+            if (isSpreadMode) {
+                // In spread mode, trust the canonical single-page map once the
+                // next CFI arrives instead of forcing a synthetic +2 jump.
+                pendingReportedPage = null;
+            } else {
+                const pageStep = 1;
+                const canonicalTotal = Math.max(1, totalPages || getAllLocationCount() || 1);
+                const maxPage = canonicalTotal;
+                pendingReportedPage = Math.max(
+                    1,
+                    Math.min(maxPage, currentPage + (direction * pageStep))
+                );
+            }
+
+            if (direction > 0) {
+                rendition.next();
+            } else {
+                rendition.prev();
+            }
+
+            return true;
+        }
+
+        function waitForLocationChange(timeoutMs) {
+            return new Promise(function(resolve) {
+                const timeout = setTimeout(function() {
+                    resolve(rendition && rendition.currentLocation ? rendition.currentLocation() : null);
+                }, timeoutMs || LOCATION_CHANGE_TIMEOUT_MS);
+
+                locationWaiters.push(function(location) {
+                    clearTimeout(timeout);
+                    resolve(location);
+                });
+            });
+        }
+
+        async function moveToNextDistinctLocation(previousCfi) {
+            const maxAttempts = 4;
+
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                await rendition.next();
+                const nextLocation = await waitForLocationChange(LOCATION_CHANGE_TIMEOUT_MS);
+                const nextCfi = getCurrentCfiFromLocation(nextLocation);
+
+                if (nextCfi && nextCfi !== previousCfi) {
+                    return nextLocation;
+                }
+
+                await new Promise(function(resolve) { setTimeout(resolve, NEXT_LOCATION_RETRY_DELAY_MS); });
+            }
+
+            return null;
+        }
+
+        function resolvePageInfo(location) {
+            const canonicalTotal = getCanonicalTotalPages();
+            const currentCfi = getCurrentCfiFromLocation(location);
+            const currentInfo = parseCfiInfo(currentCfi);
+            const locationHint = getLocationHintForCfi(currentCfi);
+            const start = location && location.start ? location.start : {};
+            const end = location && location.end ? location.end : {};
+            const displayed = start.displayed || {};
+
+            const startLocation = Number(start.location);
+            const endLocation = Number(end.location);
+            const displayedPage = Number(displayed.page);
+            const displayedTotal = Number(displayed.total);
+            const startPercentage = Number(start.percentage);
+            const endPercentage = Number(end.percentage);
+
+            const canonicalMapPage = resolvePageNumberFromMap(
+                currentCfi,
+                currentInfo,
+                locationHint,
+                getCanonicalPageCache()
+            );
+            if (canonicalMapPage !== null) {
+                return {
+                    page: Math.max(1, Math.min(canonicalTotal, canonicalMapPage)),
+                    source: 'map'
+                };
+            }
+
+            const cfiProgress = getProgressForCfi(currentCfi);
+            if (cfiProgress !== null) {
+                return {
+                    page: Math.max(
+                        1,
+                        Math.min(canonicalTotal, Math.round(cfiProgress * (canonicalTotal - 1)) + 1)
+                    ),
+                    source: 'progress'
+                };
+            }
+
+            if (Number.isFinite(startLocation)) {
+                let resolvedLocation = startLocation;
+
+                if (Number.isFinite(displayedPage) &&
+                    Number.isFinite(displayedTotal) &&
+                    displayedTotal > 1 &&
+                    Number.isFinite(endLocation)) {
+                    const pageProgress = (displayedPage - 1) / (displayedTotal - 1);
+                    const locationSpan = Math.max(0, endLocation - startLocation);
+                    resolvedLocation = startLocation + (locationSpan * pageProgress);
+                } else if (Number.isFinite(endLocation) && endLocation > startLocation) {
+                    resolvedLocation = startLocation + ((endLocation - startLocation) / 2);
+                }
+
+                return {
+                    page: Math.max(
+                        1,
+                        Math.min(canonicalTotal, Math.round(resolvedLocation) + 1)
+                    ),
+                    source: 'location'
+                };
+            }
+
+            if (Number.isFinite(startPercentage)) {
+                let resolvedPercentage = startPercentage;
+
+                if (Number.isFinite(displayedPage) &&
+                    Number.isFinite(displayedTotal) &&
+                    displayedTotal > 1 &&
+                    Number.isFinite(endPercentage)) {
+                    const pageProgress = (displayedPage - 1) / (displayedTotal - 1);
+                    const percentageSpan = Math.max(0, endPercentage - startPercentage);
+                    resolvedPercentage = startPercentage + (percentageSpan * pageProgress);
+                } else if (Number.isFinite(endPercentage) && endPercentage > startPercentage) {
+                    resolvedPercentage = startPercentage + ((endPercentage - startPercentage) / 2);
+                }
+
+                return {
+                    page: Math.max(
+                        1,
+                        Math.min(canonicalTotal, Math.round(resolvedPercentage * (canonicalTotal - 1)) + 1)
+                    ),
+                    source: 'percentage'
+                };
+            }
+
+            const scaledDisplayedPage = scaleDisplayedPageToCanonical(
+                displayedPage,
+                displayedTotal,
+                canonicalTotal
+            );
+            if (scaledDisplayedPage !== null) {
+                return {
+                    page: scaledDisplayedPage,
+                    source: 'displayed'
+                };
+            }
+
+            return {
+                page: Math.max(
+                    1,
+                    Math.min(
+                        canonicalTotal,
+                        lastResolvedPage || 1
+                    )
+                ),
+                source: 'fallback'
+            };
+        }
+
+        async function buildPageMapForLayout(layoutKey) {
+            if (!rendition || !book) {
+                return null;
+            }
+
+            const existing = cachedPageMaps[layoutKey];
+            if (existing) {
+                return existing;
+            }
+
+            if (layoutKey === 'spread' && cachedPageMaps.single) {
+                const startedAt = performance.now();
+                // Keep a separate cache entry for spread mode so toggling stays instant,
+                // but reuse the canonical single-page map instead of traversing the book twice.
+                const derived = {
+                    pageMap: cachedPageMaps.single.pageMap.slice(),
+                    pageMapInfos: cachedPageMaps.single.pageMapInfos.slice(),
+                    pageMapLocationHints: cachedPageMaps.single.pageMapLocationHints.slice()
+                };
+                cachedPageMaps.spread = derived;
+                console.log(
+                    '>>> Derived spread page map from canonical single map with',
+                    derived.pageMap.length,
+                    'pages'
+                );
+                logTiming('page map spread (derived)', startedAt);
+                return derived;
+            }
+
+            const startedAt = performance.now();
+            applyLayoutMode(layoutKey);
+            await new Promise(function(resolve) { setTimeout(resolve, PAGE_MAP_LAYOUT_SETTLE_MS); });
+
+            const seenCfis = new Set();
+            const builtPageMap = [];
+            const builtPageMapInfos = [];
+            const builtPageMapHints = [];
+            const spineItems = getLinearSpineItems();
+            const maxPages = 4000;
+
+            console.log(
+                '>>> Building page map for layout:',
+                layoutKey,
+                'across',
+                spineItems.length,
+                'spine items'
+            );
+
+            if (spineItems.length === 0) {
+                console.log('>>> No spine items available for page map build');
+            }
+
+            let pageIndex = 0;
+
+            for (let spineIndex = 0; spineIndex < spineItems.length && pageIndex < maxPages; spineIndex++) {
+                const target = getSpineItemTarget(spineItems[spineIndex]);
+                if (!target) {
+                    continue;
+                }
+
+                await rendition.display(target);
+                let location = await waitForLocationChange(LOCATION_CHANGE_TIMEOUT_MS);
+
+                while (location && pageIndex < maxPages) {
+                    const displayedCfi = getCurrentCfiFromLocation(location);
+
+                    if (!displayedCfi) {
+                        console.log('>>> Page map section stop at spine', spineIndex, 'missing cfi');
+                        break;
+                    }
+
+                    if (!seenCfis.has(displayedCfi)) {
+                        seenCfis.add(displayedCfi);
+                        builtPageMap.push(displayedCfi);
+                        builtPageMapInfos.push(parseCfiInfo(displayedCfi));
+                        builtPageMapHints.push(getLocationHintForCfi(displayedCfi));
+                        pageIndex += 1;
+                    } else {
+                        break;
+                    }
+
+                    const nextLocation = await moveToNextDistinctLocation(displayedCfi);
+                    const nextCfi = getCurrentCfiFromLocation(nextLocation);
+
+                    if (!nextCfi || nextCfi === displayedCfi || seenCfis.has(nextCfi)) {
+                        break;
+                    }
+
+                    location = nextLocation;
+                }
+            }
+
+            const cached = {
+                pageMap: builtPageMap,
+                pageMapInfos: builtPageMapInfos,
+                pageMapLocationHints: builtPageMapHints
+            };
+
+            cachedPageMaps[layoutKey] = cached;
+            console.log('>>> Page map built for layout', layoutKey, 'with', builtPageMap.length, 'pages');
+            logTiming('page map ' + layoutKey, startedAt);
+            return cached;
+        }
+
+        async function buildPageMaps() {
+            if (!rendition || !book || isBuildingPageMap) {
+                return;
+            }
+
+            isBuildingPageMap = true;
+            const requestedLayoutKey = getLayoutKey();
+            const resumeCfi = pendingRestoreCfi || window.ReaderAPI.getCurrentCfi();
+            const exactRestoreCfi = pendingRestoreCfi || resumeCfi;
+            const buildStartedAt = performance.now();
+
+            try {
+                hydrateCachedPageMapsFromStorage();
+                if (!shouldBuildPrecisePageMaps()) {
+                    console.log(
+                        '>>> Skipping precise page map build for faster open; using location-based pagination'
+                    );
+                    applyLayoutMode(requestedLayoutKey);
+                    totalPages = getCanonicalTotalPages();
+                } else {
+                    setLoadingState(
+                        'Preparing book',
+                        'Calculating pages for smooth navigation...',
+                        0.72
+                    );
+                    setViewerVisible(false);
+
+                    if (!cachedPageMaps.single) {
+                        await buildPageMapForLayout('single');
+                    } else {
+                        console.log('>>> Reusing cached single page map');
+                    }
+                    setLoadingState(
+                        'Preparing book',
+                        'Optimizing the reading layout...',
+                        0.86
+                    );
+                    if (!cachedPageMaps.spread) {
+                        await buildPageMapForLayout('spread');
+                    } else {
+                        console.log('>>> Reusing cached spread page map');
+                    }
+                    setLoadingState(
+                        'Preparing book',
+                        'Finishing your place in the book...',
+                        0.95
+                    );
+
+                    applyLayoutMode(requestedLayoutKey);
+                    setActivePageMap(requestedLayoutKey);
+                    persistCachedPageMapsToStorage();
+                }
+            } catch (error) {
+                console.error('Failed to build page maps:', error);
+            } finally {
+                const targetCfi = exactRestoreCfi || pageMap[0] || null;
+
+                if (targetCfi) {
+                    console.log('>>> Restoring after page map build to', targetCfi);
+                    suppressReportingUntil(targetCfi, 1200);
+                    await rendition.display(targetCfi);
+                    await waitForLocationChange(LOCATION_CHANGE_TIMEOUT_MS);
+                }
+
+                isBuildingPageMap = false;
+                setViewerVisible(true);
+                hideLoadingState();
+
+                // After the layout becomes visible, apply the exact saved CFI one
+                // more time so larger books settle on the same visual spot instead
+                // of just the same logical page.
+                if (exactRestoreCfi) {
+                    await new Promise(function(resolve) { setTimeout(resolve, 120); });
+                    console.log('>>> Refining restore after layout settle to', exactRestoreCfi);
+                    suppressReportingUntil(exactRestoreCfi, 1200);
+                    await rendition.display(exactRestoreCfi);
+                    await waitForLocationChange(LOCATION_CHANGE_TIMEOUT_MS);
+                }
+
+                logTiming('prepare book total', buildStartedAt);
+                reportCurrentLocation();
+            }
+        }
+
+        function queuePaginationRebuild() {
+            if (!rendition || !book || !locationsReady) {
+                return;
+            }
+
+            if (pendingPaginationRebuild) {
+                clearTimeout(pendingPaginationRebuild);
+            }
+
+            pendingPaginationRebuild = setTimeout(function() {
+                pendingPaginationRebuild = null;
+                cachedPageMaps.single = null;
+                cachedPageMaps.spread = null;
+                buildPageMaps();
+            }, 450);
+        }
+
+        function reportCurrentLocation(location) {
+            currentLocation = location || (rendition && rendition.currentLocation ? rendition.currentLocation() : null);
+            if (!currentLocation || !locationsReady || isBuildingPageMap) return;
+
+            clearNavigationLock();
+
+            const cfi = getCurrentCfiFromLocation(currentLocation);
+
+            if (
+                postLayoutSettleAnchorCfi &&
+                Date.now() < postLayoutSettleUntil &&
+                cfi &&
+                !layoutTransitionTargetCfi &&
+                !cfisMatch(cfi, postLayoutSettleAnchorCfi) &&
+                !isNearCfi(cfi, postLayoutSettleAnchorCfi)
+            ) {
+                console.log(
+                    '>>> Ignoring post-settle layout echo at',
+                    cfi,
+                    'while anchored to',
+                    postLayoutSettleAnchorCfi
+                );
+                return;
+            }
+
+            if (postLayoutSettleAnchorCfi && Date.now() >= postLayoutSettleUntil) {
+                clearPostLayoutSettleGuard();
+            }
+
+            if (layoutTransitionTargetCfi) {
+                if (!cfisMatch(cfi, layoutTransitionTargetCfi) && !isNearCfi(cfi, layoutTransitionTargetCfi)) {
+                    return;
+                }
+
+                console.log('>>> Layout switch settled on', cfi);
+                clearLayoutTransitionLock();
+                beginPostLayoutSettleGuard(cfi);
+            }
+
+            if (suppressReportingUntilCfi) {
+                if (!cfisMatch(cfi, suppressReportingUntilCfi) && !isNearCfi(cfi, suppressReportingUntilCfi)) {
+                    return;
+                }
+                clearSuppressedReportingTarget();
+            }
+
+            if (cfi) {
+                lastStableReportedCfi = cfi;
+            }
+
+            totalPages = getCanonicalTotalPages();
+            const resolvedPageInfo = resolvePageInfo(currentLocation);
+            const resolvedPage = Math.max(1, Math.min(totalPages, resolvedPageInfo.page));
+            const hasNewCfi = !!cfi && cfi !== lastReportedCfi;
+            const restoredPageHint = consumeRestorePageHint(
+                cfi,
+                totalPages,
+                resolvedPageInfo.source
+            );
+
+            if (restoredPageHint !== null) {
+                currentPage = restoredPageHint;
+                pendingReportedPage = null;
+            } else if (
+                pendingReportedPage !== null &&
+                hasNewCfi &&
+                resolvedPageInfo.source === 'fallback'
+            ) {
+                currentPage = Math.max(1, Math.min(totalPages, pendingReportedPage));
+                pendingReportedPage = null;
+            } else if (!hasNewCfi && cfi && cfi === lastReportedCfi) {
+                currentPage = Math.max(1, Math.min(totalPages, currentPage || resolvedPage));
+            } else {
+                currentPage = resolvedPage;
+            }
+
+            lastResolvedPage = currentPage;
+
+            reportPage(currentPage, totalPages, cfi);
+
+            if (cfi && cfi !== lastReportedCfi) {
+                lastReportedCfi = cfi;
+                if (
+                    pendingRestoreCfi &&
+                    (cfisMatch(cfi, pendingRestoreCfi) || isNearCfi(cfi, pendingRestoreCfi))
+                ) {
+                    pendingRestoreCfi = null;
+                }
+                if (!layoutTransitionTargetCfi) {
+                    FlutterBridge.postMessage('savePosition', { cfi: cfi });
+                }
+            }
+        }
+
+        // Flutter Bridge using InAppWebView API
+        const FlutterBridge = {
+            postMessage: function(type, data) {
+                try {
+                    // InAppWebView API
+                    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                        window.flutter_inappwebview.callHandler('FlutterBridge', {
+                            type: type,
+                            data: data || {}
+                        });
+                        console.log('>>> Bridge message sent via callHandler:', type, data);
+                    } else {
+                        console.error('>>> flutter_inappwebview not available!');
+                        // Fallback: try to store messages for later
+                        if (!window._pendingMessages) window._pendingMessages = [];
+                        window._pendingMessages.push({ type: type, data: data });
+                    }
+                } catch (e) {
+                    console.error('>>> Bridge error:', e);
+                }
+            },
+
+            onBookReady: function(metadata) {
+                console.log('>>> onBookReady called');
+                this.postMessage('bookReady', metadata);
+            },
+
+            onPageChanged: function(page, total, cfi) {
+                console.log('>>> onPageChanged called:', page, '/', total, cfi);
+                this.postMessage('pageChanged', {
+                    currentPage: page,
+                    totalPages: total,
+                    cfi: cfi || null
+                });
+            },
+
+            onTableOfContents: function(toc) {
+                console.log('>>> onTableOfContents called');
+                // Wrap array in an object - Dart expects Map, not List
+                this.postMessage('tableOfContents', { chapters: toc });
+            },
+
+            onSafeRegions: function(regions) {
+                this.postMessage('safeRegions', { regions: regions });
+            },
+
+            onError: function(message) {
+                console.log('>>> onError called:', message);
+                this.postMessage('error', { message: message });
+                setLoadingState(
+                    'Unable to open this book',
+                    message,
+                    1,
+                    { isError: true }
+                );
+                setViewerVisible(false);
+            }
+        };
+
+        window.ReaderAPI = {
+            openBook: function(filePath, options) {
+                try {
+                    console.log('Opening book:', filePath);
+                    
+                    // Clear previous book
+                    if (rendition) {
+                        rendition.destroy();
+                        rendition = null;
+                    }
+                    document.getElementById('viewer').innerHTML = '';
+                    currentLocation = null;
+                    currentPage = 1;
+                    totalPages = 0;
+                    isReady = false;
+                    locationsReady = false;
+                    lastReportedCfi = null;
+                    lastStableReportedCfi = null;
+                    layoutTransitionToken = 0;
+                    clearPostLayoutSettleGuard();
+                    pendingReportedPage = null;
+                    pageMap = [];
+                    pageMapInfos = [];
+                    pageMapLocationHints = [];
+                    cachedPageMaps = {
+                        single: null,
+                        spread: null
+                    };
+                    currentBookCacheNamespace = options && options.cacheKey ? String(options.cacheKey) : null;
+                    pendingRestoreCfi = null;
+                    pendingRestorePageHint = null;
+                    pendingRestoreTotalHint = null;
+                    clearLayoutTransitionLock();
+                    clearSuppressedReportingTarget();
+                    lastResolvedPage = 1;
+                    if (book) {
+                        book.destroy();
+                        book = null;
+                    }
+
+                    // Create new book instance
+                    book = ePub(filePath);
+                    
+                    // Get options
+                    const width = window.innerWidth;
+                    const height = window.innerHeight;
+                    const spreadMode = options && options.spread ? 'auto' : 'none';
+                    isSpreadMode = options && options.spread ? true : false;
+                    currentLayoutKey = getLayoutKey();
+                    const fontSize = options && options.fontSize ? options.fontSize : 18;
+                    currentFontSizePx = fontSize;
+                    const openStartedAt = performance.now();
+
+                    setViewerVisible(false);
+                    setLoadingState(
+                        'Opening book',
+                        'Loading content and preparing your reading view...',
+                        0.12
+                    );
+                    
+                    console.log('>>> View mode:', isSpreadMode ? 'spread' : 'single');
+                    
+                    // Wait for book to be ready before creating rendition
+                    book.ready.then(function() {
+                        console.log('Book ready - creating rendition');
+                        logTiming('book.ready', openStartedAt);
+                        setLoadingState(
+                            'Opening book',
+                            'Laying out the first pages...',
+                            0.28
+                        );
+                        
+                        // Create rendition after book is ready
+                        rendition = book.renderTo('viewer', {
+                            width: width,
+                            height: height,
+                            spread: spreadMode,
+                            flow: 'paginated',
+                            manager: 'default'
+                        });
+
+                        // Apply initial theme
+                        rendition.themes.default({
+                            'body': {
+                                'font-family': 'Georgia, serif',
+                                'font-size': fontSize + 'px',
+                                'line-height': '1.6',
+                                'color': '#333'
+                            }
+                        });
+
+                        rendition.on('locationChanged', function(location) {
+                            notifyLocationWaiters(location);
+                            queueSafeRegionReport();
+                            if (!isReady || !locationsReady || isBuildingPageMap) return;
+                            reportCurrentLocation(location);
+                        });
+
+                        rendition.on('rendered', function() {
+                            setTimeout(setupTouchHandling, 0);
+                            queueSafeRegionReport();
+                        });
+
+                        // Display first page
+                        console.log('Displaying first page...');
+                        return rendition.display();
+                    }).then(function() {
+                        console.log('Book displayed successfully');
+                        logTiming('initial display', openStartedAt);
+                        isReady = true;
+                        console.log('Book is ready for navigation');
+                        
+                        const finishPreparation = function() {
+                            // Generate locations for CFI-based percentage calculation.
+                            // Larger books use a coarser breakpoint to reduce startup cost.
+                            console.log('>>> Starting locations generation...');
+                            console.log('Book spine length:', book.spine?.length || 'unknown');
+                            const locationBreakSize = getLocationGenerationBreakSize();
+                            console.log('>>> Location break size:', locationBreakSize);
+                            const locationsStartedAt = performance.now();
+
+                            return book.locations.generate(locationBreakSize).then(function() {
+                                logTiming('locations.generate', locationsStartedAt);
+                            }).then(function() {
+                                locationsReady = true;
+                                console.log('>>> Locations generated! Total locations:', book.locations.length());
+                                return buildPageMaps();
+                            }).then(function() {
+                                logTiming('openBook end-to-end', openStartedAt);
+                                setTimeout(function() {
+                                    reportCurrentLocation();
+                                    setupTouchHandling();
+                                }, 100);
+                            });
+                        };
+
+                        if (shouldDeferProgressPreparation()) {
+                            console.log(
+                                '>>> Deferring reading progress preparation for faster first open'
+                            );
+                            setViewerVisible(true);
+                            hideLoadingState();
+                            logTiming('interactive open', openStartedAt);
+                            setTimeout(function() {
+                                finishPreparation().catch(function(error) {
+                                    console.error('>>> Error in deferred book preparation:', error);
+                                });
+                            }, 0);
+                            return null;
+                        }
+
+                        setLoadingState(
+                            'Opening book',
+                            'Calculating reading progress...',
+                            0.52
+                        );
+                        return finishPreparation();
+                    }).catch(function(error) {
+                        console.error('>>> Error in book initialization:', error);
+                        FlutterBridge.onError('Book init error: ' + error.message);
+                    });
+
+                    // Book metadata loaded
+                    book.loaded.metadata.then(function(meta) {
+                        console.log('Metadata loaded:', meta);
+                        FlutterBridge.onBookReady({
+                            title: meta.title || 'Unknown',
+                            author: meta.creator || 'Unknown Author',
+                            language: meta.language || 'en'
+                        });
+                    }).catch(function(error) {
+                        console.error('Error loading metadata:', error);
+                    });
+
+                    // Get table of contents
+                    book.loaded.navigation.then(function(nav) {
+                        console.log('TOC:', nav.toc);
+                        if (nav.toc && nav.toc.length > 0) {
+                            FlutterBridge.onTableOfContents(nav.toc.map(function(item) {
+                                return {
+                                    label: item.label,
+                                    href: item.href
+                                };
+                            }));
+                        }
+                    });
+
+                    // Handle errors
+                    book.on('openFailed', function(error) {
+                        FlutterBridge.onError('Failed to open book: ' + error.message);
+                    });
+
+                    return true;
+                } catch (e) {
+                    console.error('Error opening book:', e);
+                    FlutterBridge.onError(e.message);
+                    return false;
+                }
+            },
+
+            nextPage: function() {
+                performNavigation(1);
+            },
+
+            prevPage: function() {
+                performNavigation(-1);
+            },
+
+            goToHref: function(href) {
+                pendingReportedPage = null;
+                if (rendition) rendition.display(href);
+            },
+
+            goToCfi: function(cfi) {
+                pendingReportedPage = null;
+                if (rendition) rendition.display(cfi);
+            },
+
+            goToPage: function(pageNumber) {
+                if (!rendition || totalPages === 0) {
+                    return;
+                }
+
+                const targetPage = Math.max(1, Math.min(pageNumber, totalPages));
+                pendingReportedPage = null;
+                const canonical = getCanonicalPageCache();
+                if (canonical && canonical.pageMap[targetPage - 1]) {
+                    rendition.display(canonical.pageMap[targetPage - 1]);
+                    return;
+                }
+
+                if (book.locations && typeof book.locations.cfiFromLocation === 'function') {
+                    const fallbackCfi = book.locations.cfiFromLocation(targetPage - 1);
+                    if (fallbackCfi) {
+                        rendition.display(fallbackCfi);
+                        return;
+                    }
+                }
+
+                const ratioIndex = totalPages > 1
+                    ? Math.round(((targetPage - 1) / (totalPages - 1)) * Math.max(0, pageMap.length - 1))
+                    : 0;
+                const targetCfi = pageMap[ratioIndex];
+                if (targetCfi) {
+                    rendition.display(targetCfi);
+                }
+            },
+
+            setSpread: function(enable) {
+                if (rendition) {
+                    const layoutKey = enable ? 'spread' : 'single';
+                    const targetCfi =
+                        layoutTransitionTargetCfi ||
+                        lastStableReportedCfi ||
+                        this.getCurrentCfi() ||
+                        pendingRestoreCfi;
+                    applyLayoutMode(layoutKey);
+                    console.log('>>> Spread mode set to:', layoutKey);
+                    pendingReportedPage = null;
+                    pendingRestoreCfi = targetCfi || pendingRestoreCfi;
+                    clearPostLayoutSettleGuard();
+                    beginLayoutTransition(targetCfi);
+                    suppressReportingUntil(targetCfi, LAYOUT_SWITCH_SETTLE_TIMEOUT_MS);
+
+                    if (!shouldBuildPrecisePageMaps()) {
+                        if (targetCfi) {
+                            rendition.display(targetCfi);
+                        } else {
+                            reportCurrentLocation();
+                        }
+                        return;
+                    }
+
+                    if (setActivePageMap(layoutKey)) {
+                        if (targetCfi) {
+                            rendition.display(targetCfi);
+                        } else {
+                            reportCurrentLocation();
+                        }
+                        return;
+                    }
+
+                    queuePaginationRebuild();
+                }
+            },
+
+            setFontSize: function(size) {
+                if (rendition) {
+                    currentFontSizePx = size;
+                    rendition.themes.fontSize(size + 'px');
+                    pendingReportedPage = null;
+                    cachedPageMaps.single = null;
+                    cachedPageMaps.spread = null;
+                    pageMap = [];
+                    pageMapInfos = [];
+                    pageMapLocationHints = [];
+                    pendingRestoreCfi = this.getCurrentCfi() || pendingRestoreCfi;
+                    suppressReportingUntil(pendingRestoreCfi, 1200);
+
+                    if (!shouldBuildPrecisePageMaps()) {
+                        if (pendingRestoreCfi) {
+                            rendition.display(pendingRestoreCfi);
+                        } else {
+                            reportCurrentLocation();
+                        }
+                        return;
+                    }
+
+                    queuePaginationRebuild();
+                }
+            },
+
+            getCurrentLocation: function() {
+                return currentLocation;
+            },
+
+            getCurrentCfi: function() {
+                if (currentLocation) {
+                    return getCurrentCfiFromLocation(currentLocation);
+                }
+                if (rendition && rendition.currentLocation) {
+                    return getCurrentCfiFromLocation(rendition.currentLocation());
+                }
+                return null;
+            },
+
+            getMetadata: function() {
+                return book ? book.loaded.metadata : null;
+            },
+
+            saveCurrentPosition: function() {
+                const cfi = this.getCurrentCfi();
+                if (cfi) {
+                    console.log('Saving position:', cfi);
+                    FlutterBridge.postMessage('savePosition', { cfi: cfi });
+                    return cfi;
+                }
+                return null;
+            },
+
+            restorePosition: function(cfi) {
+                const restoreOptions = arguments.length > 1 && arguments[1] ? arguments[1] : null;
+                if (cfi && rendition) {
+                    pendingReportedPage = null;
+                    pendingRestoreCfi = cfi;
+                    pendingRestorePageHint = restoreOptions && Number.isFinite(restoreOptions.pageHint)
+                        ? Math.round(restoreOptions.pageHint)
+                        : null;
+                    pendingRestoreTotalHint = restoreOptions && Number.isFinite(restoreOptions.totalPagesHint)
+                        ? Math.round(restoreOptions.totalPagesHint)
+                        : null;
+                    suppressReportingUntil(cfi, 1200);
+                    console.log(
+                        '>>> Restore requested:',
+                        cfi,
+                        'pageHint:',
+                        pendingRestorePageHint,
+                        'totalHint:',
+                        pendingRestoreTotalHint
+                    );
+
+                    if (!isBuildingPageMap) {
+                        rendition.display(cfi);
+                    }
+
+                    if (!locationsReady || isBuildingPageMap || pageMap.length === 0) {
+                        return true;
+                    }
+
+                    return true;
+                }
+                return false;
+            }
+        };
+
+        // Touch handling - use EPUB.js built-in tap/swipe support
+        function setupTouchHandling() {
+            if (!rendition) return;
+            if (isBuildingPageMap) return;
+
+            const viewer = document.getElementById('viewer');
+            if (viewer && !viewer.classList.contains('reader-visible')) {
+                return;
+            }
+            
+            // EPUB.js rendition has built-in touch events on its iframe
+            // We hook into the rendition's display to add our touch handlers
+            const iframe = rendition.manager?.container?.querySelector('iframe');
+            if (iframe) {
+                setupIframeTouch(iframe);
+            } else {
+                // Fallback for moments before the rendition iframe is available.
+                setupContainerTouch(viewer);
+            }
+        }
+
+        const SWIPE_TRIGGER_PX = 32;
+        const QUICK_FLICK_TRIGGER_PX = 22;
+        const SWIPE_DIRECTION_RATIO = 1.08;
+        const TAP_MOVE_TOLERANCE_PX = 14;
+        const QUICK_FLICK_MAX_MS = 260;
+
+        function shouldTurnPage(deltaX, deltaY, elapsedMs) {
+            const horizontalDistance = Math.abs(deltaX);
+            const verticalDistance = Math.abs(deltaY);
+            const isHorizontalEnough =
+                horizontalDistance > verticalDistance * SWIPE_DIRECTION_RATIO;
+            const isFullSwipe =
+                horizontalDistance >= SWIPE_TRIGGER_PX && isHorizontalEnough;
+            const isQuickFlick =
+                elapsedMs <= QUICK_FLICK_MAX_MS &&
+                horizontalDistance >= QUICK_FLICK_TRIGGER_PX &&
+                isHorizontalEnough;
+
+            return isFullSwipe || isQuickFlick;
+        }
+        
+        function setupIframeTouch(iframe) {
+            const doc = iframe.contentDocument;
+            const root = doc && doc.documentElement;
+            if (!doc || !root) {
+                return;
+            }
+
+            if (root.dataset.readerTouchBound === 'true') {
+                return;
+            }
+
+            console.log('Found EPUB iframe, attaching touch handlers');
+            root.dataset.readerTouchBound = 'true';
+            let touchStartX = 0;
+            let touchStartY = 0;
+            let touchMoved = false;
+            let touchStartAt = 0;
+            
+            doc.addEventListener('touchstart', function(e) {
+                touchStartX = e.changedTouches[0].screenX;
+                touchStartY = e.changedTouches[0].screenY;
+                touchMoved = false;
+                touchStartAt = Date.now();
+            }, { passive: true });
+
+            doc.addEventListener('touchmove', function(e) {
+                const deltaX = e.changedTouches[0].screenX - touchStartX;
+                const deltaY = e.changedTouches[0].screenY - touchStartY;
+                if (
+                    Math.abs(deltaX) > TAP_MOVE_TOLERANCE_PX ||
+                    Math.abs(deltaY) > TAP_MOVE_TOLERANCE_PX
+                ) {
+                    touchMoved = true;
+                }
+            }, { passive: true });
+            
+            doc.addEventListener('touchend', function(e) {
+                const touchEndX = e.changedTouches[0].screenX;
+                const touchEndY = e.changedTouches[0].screenY;
+                const deltaX = touchEndX - touchStartX;
+                const deltaY = touchEndY - touchStartY;
+                const elapsedMs = Date.now() - touchStartAt;
+                
+                if (shouldTurnPage(deltaX, deltaY, elapsedMs)) {
+                    if (deltaX < 0) window.ReaderAPI.nextPage();
+                    else window.ReaderAPI.prevPage();
+                } else if (
+                    !touchMoved &&
+                    Math.abs(deltaX) < TAP_MOVE_TOLERANCE_PX &&
+                    Math.abs(deltaY) < TAP_MOVE_TOLERANCE_PX
+                ) {
+                    // Tap - check position
+                    const screenWidth = window.innerWidth;
+                    if (touchEndX > screenWidth * 0.75) {
+                        window.ReaderAPI.nextPage();
+                    } else if (touchEndX < screenWidth * 0.25) {
+                        window.ReaderAPI.prevPage();
+                    }
+                }
+            }, { passive: true });
+        }
+        
+        function setupContainerTouch(container) {
+            if (!container) {
+                return;
+            }
+
+            if (container.dataset.readerTouchBound === 'true') {
+                return;
+            }
+
+            console.log('Setting up EPUB.js touch handling');
+            container.dataset.readerTouchBound = 'true';
+            let touchStartX = 0;
+            let touchStartY = 0;
+            let touchMoved = false;
+            let touchStartAt = 0;
+            
+            container.addEventListener('touchstart', function(e) {
+                touchStartX = e.changedTouches[0].screenX;
+                touchStartY = e.changedTouches[0].screenY;
+                touchMoved = false;
+                touchStartAt = Date.now();
+            }, { passive: true });
+
+            container.addEventListener('touchmove', function(e) {
+                const deltaX = e.changedTouches[0].screenX - touchStartX;
+                const deltaY = e.changedTouches[0].screenY - touchStartY;
+                if (
+                    Math.abs(deltaX) > TAP_MOVE_TOLERANCE_PX ||
+                    Math.abs(deltaY) > TAP_MOVE_TOLERANCE_PX
+                ) {
+                    touchMoved = true;
+                }
+            }, { passive: true });
+            
+            container.addEventListener('touchend', function(e) {
+                const touchEndX = e.changedTouches[0].screenX;
+                const touchEndY = e.changedTouches[0].screenY;
+                const deltaX = touchEndX - touchStartX;
+                const deltaY = touchEndY - touchStartY;
+                const elapsedMs = Date.now() - touchStartAt;
+                
+                if (shouldTurnPage(deltaX, deltaY, elapsedMs)) {
+                    if (deltaX < 0) window.ReaderAPI.nextPage();
+                    else window.ReaderAPI.prevPage();
+                } else if (
+                    !touchMoved &&
+                    Math.abs(deltaX) < TAP_MOVE_TOLERANCE_PX &&
+                    Math.abs(deltaY) < TAP_MOVE_TOLERANCE_PX
+                ) {
+                    // Tap
+                    const screenWidth = window.innerWidth;
+                    if (touchEndX > screenWidth * 0.75) {
+                        window.ReaderAPI.nextPage();
+                    } else if (touchEndX < screenWidth * 0.25) {
+                        window.ReaderAPI.prevPage();
+                    }
+                }
+            }, { passive: true });
+        }
+
+        // Keyboard navigation
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                window.ReaderAPI.nextPage();
+            } else if (e.key === 'ArrowLeft') {
+                window.ReaderAPI.prevPage();
+            }
+        });
+
+        // Handle window resize
+        let resizeTimeout;
+        window.addEventListener('resize', function() {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(function() {
+                console.log('Window resized, recalculating layout...');
+                if (rendition) {
+                    rendition.resize(window.innerWidth, window.innerHeight);
+                    queuePaginationRebuild();
+                    queueSafeRegionReport();
+                }
+            }, 250);
+        });
+
+        // Debug console capture
+        (function() {
+            var debugDiv = document.getElementById('debug');
+            var oldLog = console.log;
+            var oldError = console.error;
+            
+            console.log = function() {
+                var msg = Array.prototype.slice.call(arguments).join(' ');
+                oldLog.apply(console, arguments);
+                if (DEBUG_OVERLAY && debugDiv) {
+                    debugDiv.innerHTML += '<div style="color:#0f0;">[LOG] ' + msg + '</div>';
+                }
+            };
+            
+            console.error = function() {
+                var msg = Array.prototype.slice.call(arguments).join(' ');
+                oldError.apply(console, arguments);
+                if (DEBUG_OVERLAY && debugDiv) {
+                    debugDiv.innerHTML += '<div style="color:#f00;">[ERR] ' + msg + '</div>';
+                }
+            };
+        })();
+
+        // Signal ready when shell loads
+        window.onload = function() {
+            console.log('Reader shell loaded');
+            console.log('EPUB.js available:', typeof ePub !== 'undefined');
+        };
+        
+        // Global error handler
+        window.onerror = function(msg, url, line) {
+            console.error('JS Error:', msg, 'at', url, ':', line);
+            return false;
+        };
+    </script>
+</body>
+</html>

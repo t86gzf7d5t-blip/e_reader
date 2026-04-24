@@ -1,0 +1,16 @@
+{
+  "characterId": "character_b",
+  "displayName": "Character B",
+  "role": "mom",
+  "style": "ninja_anime",
+  "defaultPosition": "bottomRight",
+  "scale": 0.22,
+  "animations": {
+    "IDLE": { "frames": ["IDLE_1.png", "IDLE_2.png"], "fps": 4, "loop": true },
+    "WAVE": { "frames": ["WAVE.png"], "fps": 6, "loop": false },
+    "WOBBLE": { "frames": ["WOBBLE.png"], "fps": 6, "loop": false },
+    "CLONE_JUTSU": { "frames": ["CLONE_JUTSU.png"], "fps": 6, "loop": false },
+    "DASH": { "frames": ["DASH.png"], "fps": 8, "loop": false },
+    "POP_CLONES": { "frames": ["POP_CLONES.png"], "fps": 6, "loop": false }
+  }
+}
