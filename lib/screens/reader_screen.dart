@@ -6,7 +6,7 @@ import '../models/book.dart';
 import '../models/character.dart';
 import '../models/reader_safe_region.dart';
 import '../widgets/book_page_view.dart';
-import '../widgets/character_scene_overlay.dart';
+import '../widgets/single_character_scene_overlay.dart';
 import '../services/character_service.dart';
 import '../services/background_service.dart';
 import '../services/reading_stats_service.dart';
@@ -127,6 +127,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _autoPlayCharacterAnimations = autoPlayAnimations;
       _characters = availableCharacters
           .where((character) => character.hasIdleFrames)
+          .take(1)
           .toList(growable: false);
       _characterStyle = currentStyle;
     });
@@ -144,6 +145,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _characterStyle = currentStyle;
       _characters = availableCharacters
           .where((character) => character.hasIdleFrames)
+          .take(1)
           .toList(growable: false);
     });
   }
@@ -791,15 +793,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
                           : null,
                     ),
                   ),
-                  if (_showCharacters && _characters.length >= 2)
+                  if (_showCharacters && _characters.isNotEmpty)
                     Positioned.fill(
-                      child: CharacterSceneOverlay(
-                        leftCharacter: _characters[0],
-                        rightCharacter: _characters[1],
-                        style: _characterStyle,
+                      child: SingleCharacterSceneOverlay(
+                        character: _characters.first,
                         autoPlay: _autoPlayCharacterAnimations,
-                        triggerKey: _characterSceneTrigger,
-                        safeRegions: _safeRegions,
                       ),
                     ),
                 ],

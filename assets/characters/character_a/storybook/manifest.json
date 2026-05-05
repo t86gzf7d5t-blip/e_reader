@@ -1,15 +1,83 @@
 {
   "characterId": "character_a",
-  "displayName": "Character A",
+  "displayName": "Storybook Boy",
   "role": "dad",
   "style": "storybook",
   "defaultPosition": "bottomLeft",
   "scale": 0.22,
   "animations": {
-    "IDLE": { "frames": ["IDLE_1.png", "IDLE_2.png"], "fps": 4, "loop": true },
-    "WAVE": { "frames": ["WAVE.png"], "fps": 6, "loop": false },
-    "WOBBLE": { "frames": ["WOBBLE.png"], "fps": 6, "loop": false },
-    "ANNOYED": { "frames": ["ANNOYED.png"], "fps": 5, "loop": false },
-    "RETURN": { "frames": ["RETURN_1.png", "RETURN_2.png"], "fps": 6, "loop": false }
+    "IDLE": {
+      "frames": [
+        "storybook_default_boy_idle_1.png",
+        "storybook_default_boy_idle_2.png"
+      ],
+      "fps": 2,
+      "loop": true
+    },
+    "ENTER": {
+      "frames": [
+        "storybook_default_boy_peek_out_1.png",
+        "storybook_default_boy_peek_out_2.png",
+        "storybook_default_boy_peek_out_3.png",
+        "storybook_default_boy_peek_out_4.png",
+        "storybook_default_boy_peek_out_5.png"
+      ],
+      "fps": 5,
+      "loop": false
+    },
+    "RETURN": {
+      "frames": [
+        "storybook_default_boy_return_1.png",
+        "storybook_default_boy_returned_2.png"
+      ],
+      "fps": 4,
+      "loop": false
+    },
+    "EXIT": {
+      "frames": [
+        "storybook_default_boy_walk_out_1.png",
+        "storybook_default_boy_walk_out_2.png",
+        "storybook_default_boy_walk_out_3.png",
+        "storybook_default_boy_walk_out_4.png",
+        "storybook_default_boy_walk_out_5.png"
+      ],
+      "fps": 5,
+      "loop": false
+    },
+    "WAVE": {
+      "frames": [
+        "storybook_default_boy_wave_1.png",
+        "storybook_default_boy_wave_2.png"
+      ],
+      "fps": 4,
+      "loop": false
+    },
+    "DASH": {
+      "frames": [
+        "storybook_default_boy_dash_1.png",
+        "storybook_default_boy_dash_2.png",
+        "storybook_default_boy_dash_3.png",
+        "storybook_default_boy_dash_4.png",
+        "storybook_default_boy_dash_5.png",
+        "storybook_default_boy_dash_6.png"
+      ],
+      "fps": 7,
+      "loop": false
+    },
+    "ANNOYED": {
+      "frames": [
+        "storybook_default_boy_annoyed_1.png"
+      ],
+      "fps": 4,
+      "loop": false
+    },
+    "WOBBLE": {
+      "frames": [
+        "storybook_default_boy_wobble_1.png",
+        "storybook_default_boy_wobb_2.png"
+      ],
+      "fps": 4,
+      "loop": false
+    }
   }
 }

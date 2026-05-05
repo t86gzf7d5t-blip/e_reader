@@ -32,18 +32,23 @@ class CharacterService {
   Future<List<CharacterManifest>> loadAvailableCharactersForStyle(
     String styleKey,
   ) async {
+    try {
+      return [
+        await _loadManifest(
+          'assets/characters/character_a/storybook/manifest.json',
+        ),
+      ];
+    } catch (_) {}
+
     final styleDirectory = _styleDirectoryFor(styleKey);
     try {
       return [
         await _loadManifest(
           'assets/characters/character_a/$styleDirectory/manifest.json',
         ),
-        await _loadManifest(
-          'assets/characters/character_b/$styleDirectory/manifest.json',
-        ),
       ];
     } catch (_) {
-      return _loadPlaceholderCharacters();
+      return [ _loadPlaceholderCharacters().first ];
     }
   }
 
