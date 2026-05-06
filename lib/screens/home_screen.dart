@@ -100,10 +100,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (status == null || status.category != BookCategory.currentlyReading) {
         continue;
       }
-      if (status.totalPages <= 0) {
-        continue;
-      }
-      if (status.currentPage <= 0 || status.progressPercent >= 95) {
+      if (status.totalPages > 1 && status.progressPercent >= 95) {
         continue;
       }
 
