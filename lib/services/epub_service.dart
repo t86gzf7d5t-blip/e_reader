@@ -3,9 +3,9 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
 
 import '../models/book.dart';
+import 'app_storage_service.dart';
 import 'epub_extractor.dart';
 
 /// Extracts EPUB files and lets EPUB.js handle rendering inside the reader.
@@ -67,7 +67,10 @@ class EpubService {
   }) async {
     try {
       print('Loading EPUB metadata only: $filePath');
-      final epubBytes = await File(filePath).readAsBytes();
+      final epubBytes = filePath.startsWith('assets/')
+          ? (await rootBundle.load(filePath)).buffer.asUint8List()
+          : await File(filePath).readAsBytes();
+      print('[EpubService] metadata-bytes bookId=$bookId bytes=${epubBytes.length} source=$filePath');
       final archive = ZipDecoder().decodeBytes(epubBytes);
       final containerXml = _readArchiveText(archive, 'META-INF/container.xml');
       if (containerXml == null) {
@@ -92,17 +95,22 @@ class EpubService {
       if (opfPath != null && opfContent != null) {
         metadata = _parseMetadataFromOpf(opfContent, opfPath);
         chapters = _parseChaptersFromArchive(archive, opfPath, opfContent);
-        final cachedCoverPath = await _extractCoverToCache(
-          archive,
-          bookId: bookId,
-          internalCoverPath: metadata['coverPath'],
-        );
-        if (cachedCoverPath != null && cachedCoverPath.isNotEmpty) {
-          metadata['coverPath'] = cachedCoverPath;
+        try {
+          final cachedCoverPath = await _extractCoverToCache(
+            archive,
+            bookId: bookId,
+            internalCoverPath: metadata['coverPath'],
+          );
+          if (cachedCoverPath != null && cachedCoverPath.isNotEmpty) {
+            metadata['coverPath'] = cachedCoverPath;
+          }
+        } catch (e) {
+          print('[EpubService] cover-cache-skipped bookId=$bookId error=$e');
+          metadata['coverPath'] = null;
         }
       }
 
-      return Book(
+      final book = Book(
         id: bookId,
         title: metadata['title'] ?? path.basenameWithoutExtension(filePath),
         author: metadata['author'] ?? 'Unknown',
@@ -112,6 +120,8 @@ class EpubService {
         isEpub: true,
         canDelete: canDelete,
       );
+      print('[EpubService] metadata-complete bookId=$bookId title="${book.title}" chapters=${book.chapters.length}');
+      return book;
     } catch (e, stackTrace) {
       print('Error loading EPUB metadata only: $e');
       print(stackTrace);
@@ -135,11 +145,16 @@ class EpubService {
       return book;
     }
 
-    final extracted = await loadEpubFile(
-      originalFilePath,
-      bookId: book.id,
-      canDelete: book.canDelete,
-    );
+    final extracted = originalFilePath.startsWith('assets/')
+        ? await loadEpubAsset(
+            originalFilePath,
+            canDelete: book.canDelete,
+          )
+        : await loadEpubFile(
+            originalFilePath,
+            bookId: book.id,
+            canDelete: book.canDelete,
+          );
 
     if (extracted == null) {
       return book;
@@ -179,7 +194,7 @@ class EpubService {
         extractDir,
         metadata['coverPath'],
       ),
-      originalFilePath: sourceKey.startsWith('assets/') ? null : sourceKey,
+      originalFilePath: sourceKey,
       extractPath: extractDir,
       chapters: chapters,
       isEpub: true,
@@ -353,7 +368,7 @@ class EpubService {
       return null;
     }
 
-    final appDir = await getApplicationDocumentsDirectory();
+    final appDir = await AppStorageService.documentsDirectory();
     final coversDir = Directory(path.join(appDir.path, 'library', 'covers'));
     if (!await coversDir.exists()) {
       await coversDir.create(recursive: true);

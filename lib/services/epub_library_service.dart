@@ -1,13 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/book.dart';
+import 'app_storage_service.dart';
 import 'epub_extractor.dart';
 import 'epub_service.dart';
 
@@ -16,6 +16,7 @@ class EpubLibraryService {
   static const String _deletedSeedPrefsKey =
       'epub_library_deleted_seed_assets_v1';
   static const int _metadataLoadBatchSize = 3;
+  static const Duration _metadataTimeout = Duration(seconds: 12);
 
   // Keep this list small and stable so every build has a predictable starter shelf.
   static const List<String> _starterSeedAssets = [
@@ -36,9 +37,13 @@ class EpubLibraryService {
   final EpubExtractor _extractor = EpubExtractor();
 
   Future<List<Book>> loadLibraryBooks() async {
+    print('[EpubLibrary] load-start');
     await _seedBundledBooksIfNeeded();
 
     final entries = await _loadEntries();
+    print(
+      '[EpubLibrary] registry entries=${entries.length} ids=${entries.map((entry) => '${entry.id}:${entry.originalFilePath}').join(',')}',
+    );
     final books = <Book>[];
 
     for (var i = 0; i < entries.length; i += _metadataLoadBatchSize) {
@@ -46,11 +51,19 @@ class EpubLibraryService {
       final loadedBatch = await Future.wait(
         batch.map((entry) async {
           try {
-            return await _epubService.loadEpubFileMetadataOnly(
-              entry.originalFilePath,
-              bookId: entry.id,
-              canDelete: true,
-            );
+            return await _epubService
+                .loadEpubFileMetadataOnly(
+                  entry.originalFilePath,
+                  bookId: entry.id,
+                  canDelete: true,
+                )
+                .timeout(
+                  _metadataTimeout,
+                  onTimeout: () {
+                    print('Timed out loading EPUB metadata ${entry.originalFilePath}');
+                    return _fallbackBookForEntry(entry);
+                  },
+                );
           } catch (e) {
             print('Error loading library EPUB ${entry.originalFilePath}: $e');
             return null;
@@ -63,8 +76,10 @@ class EpubLibraryService {
           books.add(book);
         }
       }
+      print('[EpubLibrary] loaded-so-far=${books.length}/${entries.length}');
     }
 
+    print('[EpubLibrary] load-complete books=${books.length}');
     return books;
   }
 
@@ -123,9 +138,11 @@ class EpubLibraryService {
     final entry = registry.removeAt(entryIndex);
     await _saveEntries(registry);
 
-    final originalFile = File(entry.originalFilePath);
-    if (await originalFile.exists()) {
-      await originalFile.delete();
+    if (!entry.originalFilePath.startsWith('assets/')) {
+      final originalFile = File(entry.originalFilePath);
+      if (await originalFile.exists()) {
+        await originalFile.delete();
+      }
     }
 
     await _extractor.cleanupBook(entry.id);
@@ -142,46 +159,71 @@ class EpubLibraryService {
   Future<void> _seedBundledBooksIfNeeded() async {
     final registry = await _loadEntries();
     final deletedSeeds = await _loadDeletedSeedAssets();
-    final originalsDir = await _ensureOriginalsDirectory();
+    var changed = false;
+    print(
+      '[EpubLibrary] seed-start registry=${registry.length} deleted=${deletedSeeds.length}',
+    );
 
     for (final assetPath in [..._starterSeedAssets, ..._giftSeedAssets]) {
       final normalizedAssetPath = assetPath.toLowerCase();
 
-      final alreadySeeded = registry.any(
+      final existingIndex = registry.indexWhere(
         (entry) => entry.seedAssetPath?.toLowerCase() == normalizedAssetPath,
       );
-      if (alreadySeeded || deletedSeeds.contains(normalizedAssetPath)) {
+      if (deletedSeeds.contains(normalizedAssetPath)) {
         continue;
       }
 
-      try {
-        final bytes = await rootBundle.load(assetPath);
-        final bookId = path.basenameWithoutExtension(assetPath);
-        final originalFilePath = path.join(originalsDir.path, '$bookId.epub');
-
-        final file = File(originalFilePath);
-        if (!await file.exists()) {
-          await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
-        }
-
+      final bookId = path.basenameWithoutExtension(assetPath);
+      if (existingIndex == -1) {
+        print('[EpubLibrary] seed-add $bookId -> $assetPath');
         registry.add(
           _LibraryBookEntry(
             id: bookId,
-            originalFilePath: originalFilePath,
+            originalFilePath: assetPath,
             seedAssetPath: normalizedAssetPath,
             addedAt: DateTime.now(),
           ),
         );
-      } catch (e) {
-        print('Skipping bundled EPUB seed $assetPath: $e');
+        changed = true;
+      } else if (!registry[existingIndex].originalFilePath.startsWith('assets/')) {
+        print(
+          '[EpubLibrary] seed-migrate ${registry[existingIndex].id} -> $assetPath',
+        );
+        registry[existingIndex] = _LibraryBookEntry(
+          id: registry[existingIndex].id,
+          originalFilePath: assetPath,
+          seedAssetPath: normalizedAssetPath,
+          addedAt: registry[existingIndex].addedAt,
+        );
+        changed = true;
       }
     }
 
-    await _saveEntries(registry);
+    if (changed) {
+      await _saveEntries(registry);
+    }
+    print('[EpubLibrary] seed-complete registry=${registry.length} changed=$changed');
+  }
+
+  Book _fallbackBookForEntry(_LibraryBookEntry entry) {
+    final title = path
+        .basenameWithoutExtension(entry.originalFilePath)
+        .replaceAll('_', ' ')
+        .replaceAll('-', ' ');
+
+    return Book(
+      id: entry.id,
+      title: title,
+      author: 'Unknown',
+      originalFilePath: entry.originalFilePath,
+      isEpub: true,
+      canDelete: true,
+    );
   }
 
   Future<Directory> _ensureOriginalsDirectory() async {
-    final appDir = await getApplicationDocumentsDirectory();
+    final appDir = await AppStorageService.documentsDirectory();
     final directory = Directory(path.join(appDir.path, 'library', 'originals'));
     if (!await directory.exists()) {
       await directory.create(recursive: true);

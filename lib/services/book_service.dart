@@ -14,19 +14,23 @@ class BookService {
 
   Future<List<Book>> loadAllBooks({bool forceRefresh = false}) async {
     if (!forceRefresh && _cachedBooks != null) {
+      _logBookCounts('cache-hit', _cachedBooks!);
       return List<Book>.from(_cachedBooks!);
     }
 
     if (!forceRefresh && _inFlightLoad != null) {
       final books = await _inFlightLoad!;
+      _logBookCounts('in-flight-hit', books);
       return List<Book>.from(books);
     }
 
+    print('[BookService] load-start forceRefresh=$forceRefresh');
     final loadFuture = _loadAllBooksImpl();
     _inFlightLoad = loadFuture;
 
     try {
       final books = await loadFuture;
+      _logBookCounts('load-complete', books);
       _cachedBooks = List<Book>.unmodifiable(books);
       return List<Book>.from(_cachedBooks!);
     } finally {
@@ -44,32 +48,61 @@ class BookService {
   Future<List<Book>> _loadAllBooksImpl() async {
     final books = <Book>[];
 
-    final imageBooksFuture = Future.wait(
-      _knownBooks.map((bookId) async {
-        try {
-          return await loadBook(bookId);
-        } catch (e) {
-          print('Error loading book $bookId: $e');
-          return null;
-        }
-      }),
-    );
+    try {
+      final imageBooks = await Future.wait(
+        _knownBooks.map((bookId) async {
+          try {
+            return await loadBook(bookId);
+          } catch (e) {
+            print('Error loading book $bookId: $e');
+            return null;
+          }
+        }),
+      );
+      books.addAll(imageBooks.whereType<Book>());
+      print('[BookService] image-books=${imageBooks.whereType<Book>().length}');
+    } catch (e) {
+      print('Error loading image books: $e');
+    }
 
-    final results = await Future.wait([
-      imageBooksFuture,
-      _epubLibraryService.loadLibraryBooks(),
-      _pdfService.loadImportedPdfs(),
-    ]);
+    try {
+      final pdfBooks = await _pdfService.loadImportedPdfs().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          print('Timed out loading PDFs');
+          return <Book>[];
+        },
+      );
+      books.addAll(pdfBooks);
+      print('[BookService] pdf-books=${pdfBooks.length}');
+    } catch (e) {
+      print('Error loading PDFs: $e');
+    }
 
-    final imageBooks = results[0] as List<Book?>;
-    final epubBooks = results[1] as List<Book>;
-    final pdfBooks = results[2] as List<Book>;
-
-    books.addAll(imageBooks.whereType<Book>());
-    books.addAll(epubBooks);
-    books.addAll(pdfBooks);
+    try {
+      final epubBooks = await _epubLibraryService.loadLibraryBooks().timeout(
+        const Duration(seconds: 90),
+        onTimeout: () {
+          print('Timed out loading EPUB library');
+          return <Book>[];
+        },
+      );
+      books.addAll(epubBooks);
+      print('[BookService] epub-books=${epubBooks.length}');
+    } catch (e) {
+      print('Error loading EPUB library: $e');
+    }
 
     return books;
+  }
+
+  void _logBookCounts(String phase, List<Book> books) {
+    final epubCount = books.where((book) => book.isEpub).length;
+    final pdfCount = books.where((book) => book.isPdf).length;
+    final imageCount = books.length - epubCount - pdfCount;
+    print(
+      '[BookService] $phase total=${books.length} images=$imageCount epubs=$epubCount pdfs=$pdfCount ids=${books.map((book) => book.id).join(',')}',
+    );
   }
 
   Future<Book?> loadBook(String bookId) async {

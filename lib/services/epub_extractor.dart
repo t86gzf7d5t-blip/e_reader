@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:archive/archive.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
+import 'app_storage_service.dart';
 
 class EpubExtractor {
   static final EpubExtractor _instance = EpubExtractor._internal();
@@ -23,7 +23,7 @@ class EpubExtractor {
     }
 
     try {
-      final appDir = await getApplicationDocumentsDirectory();
+      final appDir = await AppStorageService.documentsDirectory();
       final resolvedBookId = bookId ?? path.basenameWithoutExtension(sourceKey);
       final extractDir = path.join(appDir.path, 'epubs', resolvedBookId);
 
@@ -85,7 +85,7 @@ class EpubExtractor {
   }
 
   Future<void> cleanupBook(String bookId) async {
-    final appDir = await getApplicationDocumentsDirectory();
+    final appDir = await AppStorageService.documentsDirectory();
     final dir = Directory(path.join(appDir.path, 'epubs', bookId));
     if (await dir.exists()) {
       await dir.delete(recursive: true);
