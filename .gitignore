@@ -34,6 +34,7 @@ nul
 .pub/
 /build/
 /coverage/
+/dist/
 /android/build/
 assets/characters/_debug_extract/
 
