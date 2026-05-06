@@ -174,11 +174,7 @@ class ReadingStatsService {
     final statuses = await getAllBookStatuses();
     final now = DateTime.now();
     final existing =
-        statuses[bookId] ??
-        BookStatus(
-          bookId: bookId,
-          totalPages: totalPages,
-        );
+        statuses[bookId] ?? BookStatus(bookId: bookId, totalPages: totalPages);
 
     var nextCategory = existing.category;
     var nextStartedReading = existing.startedReading;
@@ -249,6 +245,44 @@ class ReadingStatsService {
     return jsonMap.map(
       (key, value) => MapEntry(key, BookStatus.fromJson(value)),
     );
+  }
+
+  Future<void> repairPlaceholderEpubStatuses(
+    Iterable<String> epubBookIds,
+  ) async {
+    await init();
+    final epubIds = epubBookIds.toSet();
+    if (epubIds.isEmpty) {
+      return;
+    }
+
+    final statuses = await getAllBookStatuses();
+    var changed = false;
+
+    for (final bookId in epubIds) {
+      final status = statuses[bookId];
+      if (status == null ||
+          status.category != BookCategory.finished ||
+          status.totalPages > 1) {
+        continue;
+      }
+
+      await _updateStatsOnUnfinish(status);
+      statuses[bookId] = BookStatus(
+        bookId: status.bookId,
+        category: BookCategory.currentlyReading,
+        startedReading:
+            status.startedReading ?? status.lastReadAt ?? DateTime.now(),
+        lastReadAt: status.lastReadAt,
+        currentPage: status.currentPage,
+        totalPages: 0,
+      );
+      changed = true;
+    }
+
+    if (changed) {
+      await _saveBookStatuses(statuses);
+    }
   }
 
   Future<void> _saveBookStatuses(Map<String, BookStatus> statuses) async {
@@ -378,8 +412,14 @@ class ReadingStatsService {
         .where((status) => status.category == category)
         .toList();
     filtered.sort((a, b) {
-      final left = a.lastReadAt ?? a.startedReading ?? DateTime.fromMillisecondsSinceEpoch(0);
-      final right = b.lastReadAt ?? b.startedReading ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final left =
+          a.lastReadAt ??
+          a.startedReading ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final right =
+          b.lastReadAt ??
+          b.startedReading ??
+          DateTime.fromMillisecondsSinceEpoch(0);
       return right.compareTo(left);
     });
     return filtered;

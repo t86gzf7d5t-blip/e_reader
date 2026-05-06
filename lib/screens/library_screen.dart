@@ -43,6 +43,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Future<void> _loadBooks({bool forceRefresh = false}) async {
     final books = await _bookService.loadAllBooks(forceRefresh: forceRefresh);
+    await _readingStatsService.repairPlaceholderEpubStatuses(
+      books.where((book) => book.isEpub).map((book) => book.id),
+    );
     final statuses = await _readingStatsService.getAllBookStatuses();
     if (!mounted) {
       return;
@@ -64,9 +67,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<Book> _applyFiltersAndSort(List<Book> books) {
     final query = _searchController.text.trim().toLowerCase();
     final filtered = books.where((book) {
-      final titleMatch = query.isEmpty || book.title.toLowerCase().contains(query);
+      final titleMatch =
+          query.isEmpty || book.title.toLowerCase().contains(query);
       final authorMatch =
-          query.isEmpty || (book.author?.toLowerCase().contains(query) ?? false);
+          query.isEmpty ||
+          (book.author?.toLowerCase().contains(query) ?? false);
       final matchesQuery = query.isEmpty || titleMatch || authorMatch;
       if (!matchesQuery) {
         return false;
@@ -103,10 +108,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
     switch (_activeSort) {
       case LibrarySort.recent:
       case LibrarySort.lastOpened:
-        final leftTime = _bookStatuses[left.id]?.lastReadAt ??
+        final leftTime =
+            _bookStatuses[left.id]?.lastReadAt ??
             left.lastReadAt ??
             DateTime.fromMillisecondsSinceEpoch(0);
-        final rightTime = _bookStatuses[right.id]?.lastReadAt ??
+        final rightTime =
+            _bookStatuses[right.id]?.lastReadAt ??
             right.lastReadAt ??
             DateTime.fromMillisecondsSinceEpoch(0);
         return rightTime.compareTo(leftTime);
@@ -130,8 +137,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
       final key = trimmed.isEmpty
           ? '#'
           : RegExp(r'^[A-Za-z]').hasMatch(trimmed[0])
-              ? trimmed[0].toUpperCase()
-              : '#';
+          ? trimmed[0].toUpperCase()
+          : '#';
       sections.putIfAbsent(key, () => []).add(book);
     }
     return Map.fromEntries(
@@ -167,9 +174,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
         if (!mounted) {
           return;
         }
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Imported "${importedBook.title}"')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Imported "${importedBook.title}"')),
+        );
       }
     } catch (e) {
       if (!mounted) {
@@ -294,10 +301,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           decoration: InputDecoration(
             hintText: 'Search by title or author...',
             hintStyle: TextStyle(color: Colors.white.withOpacity(0.72)),
-            prefixIcon: Icon(
-              Icons.search,
-              color: AppTheme.primaryOrange,
-            ),
+            prefixIcon: Icon(Icons.search, color: AppTheme.primaryOrange),
             suffixIcon: _searchController.text.isNotEmpty
                 ? IconButton(
                     icon: Icon(
@@ -844,10 +848,7 @@ class _ModernBookCard extends StatelessWidget {
                               color: const Color(0xFF51627C),
                             ),
                             if (statusLabel != null)
-                              _MetaChip(
-                                label: statusLabel,
-                                color: statusColor,
-                              ),
+                              _MetaChip(label: statusLabel, color: statusColor),
                           ],
                         ),
                         const Spacer(),
@@ -957,10 +958,7 @@ class _MetaChip extends StatelessWidget {
   final String label;
   final Color color;
 
-  const _MetaChip({
-    required this.label,
-    required this.color,
-  });
+  const _MetaChip({required this.label, required this.color});
 
   @override
   Widget build(BuildContext context) {

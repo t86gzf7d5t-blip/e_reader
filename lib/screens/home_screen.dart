@@ -59,11 +59,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadBooks() async {
     final books = await _bookService.loadAllBooks();
+    await _statsService.repairPlaceholderEpubStatuses(
+      books.where((book) => book.isEpub).map((book) => book.id),
+    );
     final statuses = await _statsService.getAllBookStatuses();
+    final readingStats = await _statsService.getReadingStats();
+    final categoryCounts = await _statsService.getCategoryCounts();
     if (!mounted) return;
     setState(() {
       _allBooks = books;
       _bookStatuses = statuses;
+      _readingStats = readingStats;
+      _categoryCounts = categoryCounts;
       _applyHomeFilters(statuses);
       _isLoading = false;
     });
@@ -96,7 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (status.totalPages <= 0) {
         continue;
       }
-      if (status.progressPercent < 2 || status.progressPercent >= 95) {
+      if (status.currentPage <= 0 || status.progressPercent >= 95) {
         continue;
       }
 
@@ -307,7 +314,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildPrimaryStat(String label, int count, IconData icon, Color color) {
+  Widget _buildPrimaryStat(
+    String label,
+    int count,
+    IconData icon,
+    Color color,
+  ) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
       decoration: BoxDecoration(
@@ -470,9 +482,7 @@ class _HomeScreenState extends State<HomeScreen> {
             decoration: BoxDecoration(
               color: const Color(0xFF172033).withOpacity(0.78),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.18),
-              ),
+              border: Border.all(color: Colors.white.withOpacity(0.18)),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withOpacity(0.18),
@@ -561,11 +571,7 @@ class _HomeScreenState extends State<HomeScreen> {
         if (constraints.maxWidth <= 720) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              titleBlock,
-              const SizedBox(height: 12),
-              searchBox,
-            ],
+            children: [titleBlock, const SizedBox(height: 12), searchBox],
           );
         }
 
@@ -587,10 +593,7 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           _buildContinueReadingPanel(),
           const SizedBox(height: 24),
-          SizedBox(
-            height: 360,
-            child: _buildQuickFindPanel(),
-          ),
+          SizedBox(height: 360, child: _buildQuickFindPanel()),
         ],
       );
     }
@@ -600,15 +603,9 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            flex: 6,
-            child: _buildContinueReadingPanel(),
-          ),
+          Expanded(flex: 6, child: _buildContinueReadingPanel()),
           const SizedBox(width: 20),
-          Expanded(
-            flex: 5,
-            child: _buildQuickFindPanel(),
-          ),
+          Expanded(flex: 5, child: _buildQuickFindPanel()),
         ],
       ),
     );
@@ -866,16 +863,11 @@ class _ModernBookCard extends StatelessWidget {
                     borderRadius: const BorderRadius.vertical(
                       top: Radius.circular(20),
                     ),
-                    child: SizedBox.expand(
-                      child: _BookCoverArt(book: book),
-                    ),
+                    child: SizedBox.expand(child: _BookCoverArt(book: book)),
                   ),
                   Align(
                     alignment: Alignment.bottomCenter,
-                    child: Container(
-                      height: 1,
-                      color: const Color(0xFFD9CEB3),
-                    ),
+                    child: Container(height: 1, color: const Color(0xFFD9CEB3)),
                   ),
                   Positioned(
                     top: 12,
@@ -1088,10 +1080,7 @@ class _QuickFindChip extends StatelessWidget {
   final String label;
   final Color color;
 
-  const _QuickFindChip({
-    required this.label,
-    required this.color,
-  });
+  const _QuickFindChip({required this.label, required this.color});
 
   @override
   Widget build(BuildContext context) {

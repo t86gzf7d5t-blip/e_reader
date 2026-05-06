@@ -66,8 +66,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _prefs?.getDouble('${_getBookKey()}_fontsize') ?? 18.0;
     final savedViewMode = _prefs?.getBool('${_getBookKey()}_spread') ?? false;
     final savedCfi = _prefs?.getString('${_getBookKey()}_cfi');
-    final savedTotalPagesHint =
-        _prefs?.getInt('${_getBookKey()}_page_count');
+    final savedTotalPagesHint = _prefs?.getInt('${_getBookKey()}_page_count');
 
     // For EPUBs, store the saved CFI for position restoration
     if (widget.book.isEpub && savedCfi != null) {
@@ -102,22 +101,22 @@ class _ReaderScreenState extends State<ReaderScreen> {
       );
     }
 
-    // Update progress
-    await _statsService.updateBookProgress(
-      widget.book.id,
-      _currentPage,
-      _displayedTotalPages,
-    );
+    if (_hasReliableProgressTotal) {
+      await _statsService.updateBookProgress(
+        widget.book.id,
+        _currentPage,
+        _displayedTotalPages,
+      );
+    }
   }
 
   Future<void> _loadCharacterOverlayState() async {
     final showCharacters = await _characterService.getShowCharacters();
-    final autoPlayAnimations =
-        await _characterService.getAutoPlayAnimations();
+    final autoPlayAnimations = await _characterService.getAutoPlayAnimations();
     await _backgroundService.init();
     final currentStyle = await _backgroundService.getCurrentAnimationStyle();
-    final availableCharacters =
-        await _characterService.loadAvailableCharactersForStyle(currentStyle);
+    final availableCharacters = await _characterService
+        .loadAvailableCharactersForStyle(currentStyle);
     if (!mounted) {
       return;
     }
@@ -135,8 +134,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _handleBackgroundStyleChanged() async {
     final currentStyle = await _backgroundService.getCurrentAnimationStyle();
-    final availableCharacters =
-        await _characterService.loadAvailableCharactersForStyle(currentStyle);
+    final availableCharacters = await _characterService
+        .loadAvailableCharactersForStyle(currentStyle);
     if (!mounted) {
       return;
     }
@@ -220,7 +219,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
         if (pendingRegions != null) {
           _safeRegions = pendingRegions;
         }
-        if (pendingPage != null && pendingPage != _lastSettledCharacterScenePage) {
+        if (pendingPage != null &&
+            pendingPage != _lastSettledCharacterScenePage) {
           _characterSceneTrigger++;
           _lastSettledCharacterScenePage = pendingPage;
         }
@@ -237,12 +237,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
     await _persistKnownTotalPages();
 
-    // Update reading stats
-    await _statsService.updateBookProgress(
-      widget.book.id,
-      _currentPage,
-      _displayedTotalPages,
-    );
+    if (_hasReliableProgressTotal) {
+      await _statsService.updateBookProgress(
+        widget.book.id,
+        _currentPage,
+        _displayedTotalPages,
+      );
+    }
   }
 
   Future<void> _markBookFinished() async {
@@ -379,9 +380,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _actualTotalPages = totalPages;
       });
       _persistKnownTotalPages();
+      _saveProgress();
     } else {
       debugPrint('No change needed, values match');
     }
+  }
+
+  bool get _hasReliableProgressTotal {
+    if (!widget.book.isEpub) {
+      return widget.book.totalPages > 0;
+    }
+
+    return _actualTotalPages != null && _actualTotalPages! > 1;
   }
 
   int get _displayedTotalPages {
@@ -420,7 +430,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final filtered = <Chapter>[];
 
     for (final chapter in sourceChapters) {
-      final normalizedTitle = chapter.title.trim().replaceAll(RegExp(r'\s+'), ' ');
+      final normalizedTitle = chapter.title.trim().replaceAll(
+        RegExp(r'\s+'),
+        ' ',
+      );
       if (normalizedTitle.isEmpty) {
         continue;
       }
@@ -474,14 +487,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
 
     final filteredIncoming = chapters
-        .where((chapter) => chapter.title.trim().isNotEmpty && chapter.href.trim().isNotEmpty)
+        .where(
+          (chapter) =>
+              chapter.title.trim().isNotEmpty && chapter.href.trim().isNotEmpty,
+        )
         .toList(growable: false);
 
     if (_sameChapterList(_epubChapters, filteredIncoming)) {
       return;
     }
 
-    debugPrint('Updating EPUB chapters from WebView TOC: ${filteredIncoming.length}');
+    debugPrint(
+      'Updating EPUB chapters from WebView TOC: ${filteredIncoming.length}',
+    );
     setState(() {
       _epubChapters = filteredIncoming;
     });
@@ -786,8 +804,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                           ? _onTotalPagesChanged
                           : null,
                       epubReaderKey: widget.book.isEpub ? _epubReaderKey : null,
-                      restorePageHint:
-                          widget.book.isEpub ? _restorePageHint : null,
+                      restorePageHint: widget.book.isEpub
+                          ? _restorePageHint
+                          : null,
                       restoreTotalPagesHint: widget.book.isEpub
                           ? _restoreTotalPagesHint
                           : null,
