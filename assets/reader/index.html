@@ -189,6 +189,7 @@
         let postLayoutSettleUntil = 0;
         let currentBookCacheNamespace = null;
         let currentFontSizePx = 18;
+        let isFixedLayoutBook = false;
         let pendingSafeRegionReport = null;
         const PAGINATION_CACHE_VERSION = 1;
         const LOCATION_CHANGE_TIMEOUT_MS = 900;
@@ -241,6 +242,46 @@
             }
 
             return item.href || item.url || null;
+        }
+
+        function normalizeHref(value) {
+            if (!value || typeof value !== 'string') {
+                return null;
+            }
+
+            try {
+                const withoutHash = value.split('#')[0];
+                const decoded = decodeURIComponent(withoutHash);
+                return decoded.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+            } catch (error) {
+                return value.split('#')[0].replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+            }
+        }
+
+        function getCurrentHrefFromLocation(location) {
+            const start = location && location.start ? location.start : {};
+            return start.href || start.url || null;
+        }
+
+        function getSpinePageFromLocation(location) {
+            const href = normalizeHref(getCurrentHrefFromLocation(location));
+            if (!href) {
+                return null;
+            }
+
+            const spineItems = getLinearSpineItems();
+            for (let index = 0; index < spineItems.length; index++) {
+                const target = normalizeHref(getSpineItemTarget(spineItems[index]));
+                if (!target) {
+                    continue;
+                }
+
+                if (href === target || href.endsWith('/' + target) || target.endsWith('/' + href)) {
+                    return index + 1;
+                }
+            }
+
+            return null;
         }
 
         function getLayoutKey() {
@@ -296,6 +337,10 @@
         }
 
         function getCanonicalTotalPages() {
+            if (isFixedLayoutBook) {
+                return Math.max(1, getLinearSpineItems().length || totalPages || 1);
+            }
+
             const canonical = getCanonicalPageCache();
             if (canonical && canonical.pageMap.length > 0) {
                 return Math.max(1, canonical.pageMap.length);
@@ -601,6 +646,8 @@
                 return;
             }
 
+            isFixedLayoutBook = true;
+
             const frameWidth = iframe.clientWidth || iframe.getBoundingClientRect().width || window.innerWidth;
             const frameHeight = iframe.clientHeight || iframe.getBoundingClientRect().height || window.innerHeight;
             if (!frameWidth || !frameHeight) {
@@ -618,14 +665,33 @@
                 doc.head.appendChild(styleNode);
             }
 
+            doc.querySelectorAll('style').forEach(function(node) {
+                if (node.id === 'storybook-fixed-layout-fit') {
+                    return;
+                }
+
+                const text = node.textContent || '';
+                if (text.includes('Georgia, serif') || text.includes('line-height: 1.6')) {
+                    node.disabled = true;
+                }
+            });
+
             styleNode.textContent = `
-                html {
+                html,
+                body {
                     width: ${frameWidth}px !important;
                     height: ${frameHeight}px !important;
                     margin: 0 !important;
                     padding: 0 !important;
                     overflow: hidden !important;
                     background: #fff !important;
+                    column-count: auto !important;
+                    column-fill: auto !important;
+                    column-gap: normal !important;
+                    column-width: auto !important;
+                    -webkit-column-count: auto !important;
+                    -webkit-column-gap: normal !important;
+                    -webkit-column-width: auto !important;
                 }
 
                 body {
@@ -637,6 +703,15 @@
                     transform: translate(${offsetX}px, ${offsetY}px) scale(${scale});
                     transform-origin: top left !important;
                     background: #fff !important;
+                }
+
+                body > * {
+                    column-count: auto !important;
+                    column-gap: normal !important;
+                    column-width: auto !important;
+                    -webkit-column-count: auto !important;
+                    -webkit-column-gap: normal !important;
+                    -webkit-column-width: auto !important;
                 }
 
                 img {
@@ -1320,6 +1395,16 @@
 
         function resolvePageInfo(location) {
             const canonicalTotal = getCanonicalTotalPages();
+            if (isFixedLayoutBook) {
+                const spinePage = getSpinePageFromLocation(location);
+                if (spinePage !== null) {
+                    return {
+                        page: Math.max(1, Math.min(canonicalTotal, spinePage)),
+                        source: 'fixed-spine'
+                    };
+                }
+            }
+
             const currentCfi = getCurrentCfiFromLocation(location);
             const currentInfo = parseCfiInfo(currentCfi);
             const locationHint = getLocationHintForCfi(currentCfi);
@@ -1467,6 +1552,33 @@
             const builtPageMapHints = [];
             const spineItems = getLinearSpineItems();
             const maxPages = 4000;
+
+            if (isFixedLayoutBook && spineItems.length > 0) {
+                spineItems.forEach(function(item, index) {
+                    const target = getSpineItemTarget(item);
+                    if (!target) {
+                        return;
+                    }
+
+                    builtPageMap.push(target);
+                    builtPageMapInfos.push({ spineIndex: index, textIndex: 0 });
+                    builtPageMapHints.push({
+                        location: index,
+                        percentage: spineItems.length <= 1 ? 0 : index / (spineItems.length - 1)
+                    });
+                });
+
+                const fixedCached = {
+                    pageMap: builtPageMap,
+                    pageMapInfos: builtPageMapInfos,
+                    pageMapLocationHints: builtPageMapHints
+                };
+
+                cachedPageMaps[layoutKey] = fixedCached;
+                console.log('>>> Fixed-layout page map built for layout', layoutKey, 'with', builtPageMap.length, 'spine pages');
+                logTiming('page map fixed ' + layoutKey, startedAt);
+                return fixedCached;
+            }
 
             console.log(
                 '>>> Building page map for layout:',
@@ -1804,6 +1916,7 @@
                     locationsReady = false;
                     lastReportedCfi = null;
                     lastStableReportedCfi = null;
+                    isFixedLayoutBook = false;
                     layoutTransitionToken = 0;
                     clearPostLayoutSettleGuard();
                     pendingReportedPage = null;
