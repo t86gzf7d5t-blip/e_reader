@@ -36,15 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _loadBooks();
-    _loadStats();
-  }
-
-  Future<void> _loadStats() async {
-    _showStatsWidget = await _statsService.getShowStatsWidget();
-    _readingStats = await _statsService.getReadingStats();
-    _categoryCounts = await _statsService.getCategoryCounts();
-    if (mounted) setState(() {});
+    _loadHomeData();
   }
 
   @override
@@ -57,16 +49,18 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  Future<void> _loadBooks() async {
+  Future<void> _loadHomeData() async {
+    final showStatsWidget = await _statsService.getShowStatsWidget();
     final books = await _bookService.loadAllBooks();
     await _statsService.repairPlaceholderEpubStatuses(
       books.where((book) => book.isEpub).map((book) => book.id),
     );
     final statuses = await _statsService.getAllBookStatuses();
     final readingStats = await _statsService.getReadingStats();
-    final categoryCounts = await _statsService.getCategoryCounts();
+    final categoryCounts = _buildLibraryCategoryCounts(books, statuses);
     if (!mounted) return;
     setState(() {
+      _showStatsWidget = showStatsWidget;
       _allBooks = books;
       _bookStatuses = statuses;
       _readingStats = readingStats;
@@ -74,6 +68,14 @@ class _HomeScreenState extends State<HomeScreen> {
       _applyHomeFilters(statuses);
       _isLoading = false;
     });
+
+    debugPrint(
+      '[HomeScreen] home-data books=${books.length} '
+      'statuses=${statuses.length} '
+      'readingNow=${categoryCounts[BookCategory.currentlyReading] ?? 0} '
+      'continue=${_continueReadingBooks.length} '
+      'continueIds=${_continueReadingBooks.map((book) => book.id).join(',')}',
+    );
   }
 
   void _applyHomeFilters(Map<String, BookStatus> statuses) {
@@ -97,14 +99,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
     for (final book in books) {
       final status = statuses[book.id];
-      if (status == null || status.category != BookCategory.currentlyReading) {
-        continue;
-      }
-      if (status.totalPages > 1 && status.progressPercent >= 95) {
+      if (!_isContinueReadingStatus(status)) {
         continue;
       }
 
-      active.add((book: book, status: status));
+      active.add((book: book, status: status!));
     }
 
     active.sort((left, right) {
@@ -120,6 +119,44 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     return active.map((entry) => entry.book).toList();
+  }
+
+  bool _isContinueReadingStatus(BookStatus? status) {
+    if (status == null || status.category != BookCategory.currentlyReading) {
+      return false;
+    }
+
+    return !(status.totalPages > 1 && status.progressPercent >= 95);
+  }
+
+  Map<BookCategory, int> _buildLibraryCategoryCounts(
+    List<Book> books,
+    Map<String, BookStatus> statuses,
+  ) {
+    final counts = <BookCategory, int>{
+      BookCategory.wantToRead: 0,
+      BookCategory.currentlyReading: 0,
+      BookCategory.finished: 0,
+    };
+
+    for (final book in books) {
+      final status = statuses[book.id];
+      if (status == null) {
+        continue;
+      }
+
+      if (status.category == BookCategory.currentlyReading) {
+        if (_isContinueReadingStatus(status)) {
+          counts[BookCategory.currentlyReading] =
+              (counts[BookCategory.currentlyReading] ?? 0) + 1;
+        }
+        continue;
+      }
+
+      counts[status.category] = (counts[status.category] ?? 0) + 1;
+    }
+
+    return counts;
   }
 
   List<Book> _buildQuickFindBooks(
@@ -167,15 +204,43 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _refreshHomeData() async {
-    await _loadStats();
-    await _loadBooks();
+    await _loadHomeData();
   }
 
   void _openBook(Book book) {
+    if (!book.isSupported) {
+      _showUnsupportedBookDialog(book);
+      return;
+    }
+
     Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => ReaderScreen(book: book)),
     ).then((_) => _refreshHomeData());
+  }
+
+  void _showUnsupportedBookDialog(Book book) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1F2E),
+        title: const Text(
+          'Cannot Open Book',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          book.unsupportedReason ??
+              'This book format is not supported by Storytime Reader.',
+          style: TextStyle(color: Colors.white.withOpacity(0.8)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

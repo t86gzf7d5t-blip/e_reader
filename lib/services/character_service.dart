@@ -8,6 +8,7 @@ import '../models/character.dart';
 class CharacterService {
   static const String _showCharactersKey = 'reader_show_characters';
   static const String _autoPlayAnimationsKey = 'reader_auto_play_animations';
+  static const String _animationScaleKey = 'reader_animation_scale';
 
   Future<bool> getShowCharacters() async {
     final prefs = await SharedPreferences.getInstance();
@@ -29,16 +30,34 @@ class CharacterService {
     await prefs.setBool(_autoPlayAnimationsKey, value);
   }
 
+  Future<double> getAnimationScale() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getDouble(_animationScaleKey) ?? 1.1;
+  }
+
+  Future<void> setAnimationScale(double value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_animationScaleKey, value.clamp(0.7, 3.0));
+  }
+
   Future<List<CharacterManifest>> loadAvailableCharactersForStyle(
     String styleKey,
   ) async {
-    try {
-      return [
-        await _loadManifest(
-          'assets/characters/character_a/storybook/manifest.json',
-        ),
-      ];
-    } catch (_) {}
+    if (styleKey == 'pokemon' || styleKey == 'monster_adventure') {
+      return [_loadGeneratedMonsterAdventure()];
+    }
+
+    if (styleKey == 'default' || styleKey == 'storybook') {
+      try {
+        return [
+          await _loadManifest(
+            'assets/characters/character_a/storybook/manifest.json',
+          ),
+        ];
+      } catch (_) {
+        return [_loadGeneratedStorybookBoy()];
+      }
+    }
 
     final styleDirectory = _styleDirectoryFor(styleKey);
     try {
@@ -48,7 +67,7 @@ class CharacterService {
         ),
       ];
     } catch (_) {
-      return [ _loadPlaceholderCharacters().first ];
+      return [_loadPlaceholderCharacters().first];
     }
   }
 
@@ -89,10 +108,9 @@ class CharacterService {
 
     for (final entry in animationsJson.entries) {
       final value = entry.value as Map<String, dynamic>? ?? const {};
-      final frames =
-          (value['frames'] as List<dynamic>? ?? const [])
-              .map((frame) => '$assetDirectory/${frame.toString()}')
-              .toList(growable: false);
+      final frames = (value['frames'] as List<dynamic>? ?? const [])
+          .map((frame) => '$assetDirectory/${frame.toString()}')
+          .toList(growable: false);
       animations[entry.key] = CharacterAnimationClip(
         id: entry.key,
         frames: frames,
@@ -110,6 +128,127 @@ class CharacterService {
           manifestJson['defaultPosition']?.toString() ?? 'bottomLeft',
       scale: (manifestJson['scale'] as num?)?.toDouble() ?? 0.22,
       animations: animations,
+    );
+  }
+
+  CharacterManifest _loadGeneratedStorybookBoy() {
+    const assetDirectory = 'assets/characters/character_a/storybook';
+
+    List<String> frames(String state, int count) {
+      return List.generate(count, (index) {
+        final padded = index.toString().padLeft(2, '0');
+        return '$assetDirectory/storybook_default_boy_${state}_frame_${padded}_delay-0.08s.png';
+      }, growable: false);
+    }
+
+    return CharacterManifest(
+      id: 'storybook_default_boy',
+      name: 'Storybook Boy',
+      role: 'companion',
+      style: CharacterStyle.storybook,
+      defaultPosition: 'bottomLeft',
+      scale: 0.62,
+      animations: {
+        'PEEK_IN': CharacterAnimationClip(
+          id: 'PEEK_IN',
+          frames: frames('peek_out', 63),
+          fps: 12,
+          loop: false,
+        ),
+        'IDLE': CharacterAnimationClip(
+          id: 'IDLE',
+          frames: frames('idle', 63),
+          fps: 12,
+          loop: true,
+        ),
+        'WAVE': CharacterAnimationClip(
+          id: 'WAVE',
+          frames: frames('wave', 63),
+          fps: 12,
+          loop: false,
+        ),
+        'ANNOYED': CharacterAnimationClip(
+          id: 'ANNOYED',
+          frames: frames('annoyed', 128),
+          fps: 12,
+          loop: false,
+        ),
+        'DASH': CharacterAnimationClip(
+          id: 'DASH',
+          frames: frames('dash', 90),
+          fps: 12,
+          loop: false,
+        ),
+        'WALK_OUT': CharacterAnimationClip(
+          id: 'WALK_OUT',
+          frames: frames('walk_out', 63),
+          fps: 12,
+          loop: false,
+        ),
+      },
+    );
+  }
+
+  CharacterManifest _loadGeneratedMonsterAdventure() {
+    const assetDirectory = 'assets/characters/character_a/monster_adventure';
+
+    List<String> frames(String state, int count) {
+      return List.generate(count, (index) {
+        return '$assetDirectory/poke_${state}_frame_${index}_delay-0.08s.png';
+      }, growable: false);
+    }
+
+    return CharacterManifest(
+      id: 'monster_adventure_poke',
+      name: 'Monster Adventure',
+      role: 'companion',
+      style: CharacterStyle.monsterAdventure,
+      defaultPosition: 'bottomLeft',
+      scale: 0.72,
+      animations: {
+        'PEEK_IN': CharacterAnimationClip(
+          id: 'PEEK_IN',
+          frames: frames('peek_out', 63),
+          fps: 12,
+          loop: false,
+        ),
+        'IDLE': CharacterAnimationClip(
+          id: 'IDLE',
+          frames: frames('idle', 63),
+          fps: 12,
+          loop: true,
+        ),
+        'WAVE': CharacterAnimationClip(
+          id: 'WAVE',
+          frames: frames('wave', 88),
+          fps: 12,
+          loop: false,
+        ),
+        'ANNOYED': CharacterAnimationClip(
+          id: 'ANNOYED',
+          frames: frames('annoyed', 86),
+          fps: 12,
+          loop: false,
+        ),
+        'DASH': CharacterAnimationClip(
+          id: 'DASH',
+          frames: frames('dash', 88),
+          fps: 12,
+          loop: false,
+        ),
+        'WALK_OUT': CharacterAnimationClip(
+          id: 'WALK_OUT',
+          frames: frames('walk_out', 101),
+          fps: 12,
+          loop: false,
+        ),
+        'FLAME': CharacterAnimationClip(
+          id: 'FLAME',
+          frames: frames('flame', 124),
+          fps: 12,
+          loop: false,
+        ),
+      },
     );
   }
 

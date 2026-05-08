@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,12 +16,7 @@ class BackgroundService extends ChangeNotifier {
   static const String _backgroundStylesKey = 'background_styles';
 
   // Animation styles available
-  static const List<String> animationStyles = [
-    'pokemon',
-    'naruto',
-    'ghibli',
-    'default',
-  ];
+  static const List<String> animationStyles = ['pokemon', 'default'];
 
   // Default backgrounds - will be auto-scanned on startup
   List<String> _defaultBackgrounds = [];
@@ -105,13 +99,15 @@ class BackgroundService extends ChangeNotifier {
     final styles = _prefs?.getString(_backgroundStylesKey);
     if (styles != null) {
       final Map<String, dynamic> styleMap = json.decode(styles);
-      return styleMap[backgroundPath] ?? 'default';
+      final style = styleMap[backgroundPath] ?? 'default';
+      return animationStyles.contains(style) ? style : 'default';
     }
     return 'default';
   }
 
   /// Set animation style for a background
   Future<void> setAnimationStyle(String backgroundPath, String style) async {
+    final normalizedStyle = animationStyles.contains(style) ? style : 'default';
     final existing = _prefs?.getString(_backgroundStylesKey);
     Map<String, dynamic> styleMap = {};
 
@@ -119,7 +115,7 @@ class BackgroundService extends ChangeNotifier {
       styleMap = Map<String, dynamic>.from(json.decode(existing));
     }
 
-    styleMap[backgroundPath] = style;
+    styleMap[backgroundPath] = normalizedStyle;
     await _prefs?.setString(_backgroundStylesKey, json.encode(styleMap));
     notifyListeners();
   }

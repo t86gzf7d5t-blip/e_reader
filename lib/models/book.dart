@@ -35,6 +35,7 @@ class Book {
   final bool isEpub;
   final bool isPdf;
   final bool canDelete;
+  final String? unsupportedReason;
   final String? lastPositionCfi; // EPUB CFI for last reading position
   final DateTime? lastReadAt;
 
@@ -50,6 +51,7 @@ class Book {
     this.isEpub = false,
     this.isPdf = false,
     this.canDelete = false,
+    this.unsupportedReason,
     this.lastPositionCfi,
     this.lastReadAt,
   });
@@ -66,6 +68,7 @@ class Book {
     bool? isEpub,
     bool? isPdf,
     bool? canDelete,
+    String? unsupportedReason,
     String? lastPositionCfi,
     DateTime? lastReadAt,
   }) {
@@ -81,10 +84,14 @@ class Book {
       isEpub: isEpub ?? this.isEpub,
       isPdf: isPdf ?? this.isPdf,
       canDelete: canDelete ?? this.canDelete,
+      unsupportedReason: unsupportedReason ?? this.unsupportedReason,
       lastPositionCfi: lastPositionCfi ?? this.lastPositionCfi,
       lastReadAt: lastReadAt ?? this.lastReadAt,
     );
   }
+
+  bool get isSupported =>
+      unsupportedReason == null || unsupportedReason!.isEmpty;
 
   /// Total pages (for image books) or approximate (for EPUBs)
   int get totalPages =>

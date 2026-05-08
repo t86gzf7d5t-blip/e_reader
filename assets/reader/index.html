@@ -569,6 +569,91 @@
             return occupied;
         }
 
+        function parseViewportSize(content) {
+            if (!content || typeof content !== 'string') {
+                return null;
+            }
+
+            const widthMatch = content.match(/width\s*=\s*([0-9.]+)/i);
+            const heightMatch = content.match(/height\s*=\s*([0-9.]+)/i);
+            const width = widthMatch ? Number(widthMatch[1]) : NaN;
+            const height = heightMatch ? Number(heightMatch[1]) : NaN;
+
+            if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+                return null;
+            }
+
+            return { width: width, height: height };
+        }
+
+        function normalizeFixedLayoutFrame() {
+            const iframe = rendition && rendition.manager && rendition.manager.container
+                ? rendition.manager.container.querySelector('iframe')
+                : null;
+            if (!iframe || !iframe.contentDocument) {
+                return;
+            }
+
+            const doc = iframe.contentDocument;
+            const viewportMeta = doc.querySelector('meta[name="viewport"]');
+            const viewportSize = parseViewportSize(viewportMeta ? viewportMeta.getAttribute('content') : null);
+            if (!viewportSize) {
+                return;
+            }
+
+            const frameWidth = iframe.clientWidth || iframe.getBoundingClientRect().width || window.innerWidth;
+            const frameHeight = iframe.clientHeight || iframe.getBoundingClientRect().height || window.innerHeight;
+            if (!frameWidth || !frameHeight) {
+                return;
+            }
+
+            const scale = Math.min(frameWidth / viewportSize.width, frameHeight / viewportSize.height);
+            const offsetX = Math.max(0, (frameWidth - viewportSize.width * scale) / 2);
+            const offsetY = Math.max(0, (frameHeight - viewportSize.height * scale) / 2);
+
+            let styleNode = doc.getElementById('storybook-fixed-layout-fit');
+            if (!styleNode) {
+                styleNode = doc.createElement('style');
+                styleNode.id = 'storybook-fixed-layout-fit';
+                doc.head.appendChild(styleNode);
+            }
+
+            styleNode.textContent = `
+                html {
+                    width: ${frameWidth}px !important;
+                    height: ${frameHeight}px !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    overflow: hidden !important;
+                    background: #fff !important;
+                }
+
+                body {
+                    width: ${viewportSize.width}px !important;
+                    height: ${viewportSize.height}px !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    overflow: hidden !important;
+                    transform: translate(${offsetX}px, ${offsetY}px) scale(${scale});
+                    transform-origin: top left !important;
+                    background: #fff !important;
+                }
+
+                img {
+                    max-width: none !important;
+                }
+            `;
+
+            console.log(
+                '>>> Fixed layout normalized:',
+                viewportSize.width + 'x' + viewportSize.height,
+                'frame',
+                Math.round(frameWidth) + 'x' + Math.round(frameHeight),
+                'scale',
+                scale.toFixed(3)
+            );
+        }
+
         function computeSafeRegions() {
             const viewportRect = {
                 left: 0,
@@ -1800,6 +1885,7 @@
                         });
 
                         rendition.on('rendered', function() {
+                            normalizeFixedLayoutFrame();
                             setTimeout(setupTouchHandling, 0);
                             queueSafeRegionReport();
                         });
@@ -1837,27 +1923,20 @@
                             });
                         };
 
-                        if (shouldDeferProgressPreparation()) {
-                            console.log(
-                                '>>> Deferring reading progress preparation for faster first open'
-                            );
-                            setViewerVisible(true);
-                            hideLoadingState();
-                            logTiming('interactive open', openStartedAt);
-                            setTimeout(function() {
-                                finishPreparation().catch(function(error) {
-                                    console.error('>>> Error in deferred book preparation:', error);
-                                });
-                            }, 0);
-                            return null;
-                        }
-
-                        setLoadingState(
-                            'Opening book',
-                            'Calculating reading progress...',
-                            0.52
+                        console.log(
+                            '>>> Deferring reading progress preparation until after first render'
                         );
-                        return finishPreparation();
+                        setViewerVisible(true);
+                        hideLoadingState();
+                        logTiming('interactive open', openStartedAt);
+                        setTimeout(function() {
+                            reportCurrentLocation();
+                            setupTouchHandling();
+                            finishPreparation().catch(function(error) {
+                                console.error('>>> Error in deferred book preparation:', error);
+                            });
+                        }, 0);
+                        return null;
                     }).catch(function(error) {
                         console.error('>>> Error in book initialization:', error);
                         FlutterBridge.onError('Book init error: ' + error.message);

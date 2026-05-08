@@ -1,7 +1,9 @@
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import '../app_version.dart';
 import '../theme.dart';
+import '../services/app_info_service.dart';
 import '../services/background_service.dart';
 import '../services/character_service.dart';
 import '../services/reading_stats_service.dart';
@@ -16,8 +18,11 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _showCharacters = true;
   bool _autoPlayAnimations = true;
+  double _animationScale = 1.0;
   bool _fullScreenMode = true;
   bool _showStatsWidget = true;
+  String _displayVersion = appVersion;
+  final AppInfoService _appInfoService = AppInfoService();
   final BackgroundService _backgroundService = BackgroundService();
   final CharacterService _characterService = CharacterService();
   final ReadingStatsService _statsService = ReadingStatsService();
@@ -33,15 +38,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _loadData() async {
+    await _loadAppInfo();
     await _loadBackgroundData();
     await _loadStatsSettings();
     await _loadCharacterSettings();
   }
 
+  Future<void> _loadAppInfo() async {
+    final version = await _appInfoService.getDisplayVersion();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _displayVersion = version;
+    });
+  }
+
   Future<void> _loadCharacterSettings() async {
     final showCharacters = await _characterService.getShowCharacters();
-    final autoPlayAnimations =
-        await _characterService.getAutoPlayAnimations();
+    final autoPlayAnimations = await _characterService.getAutoPlayAnimations();
+    final animationScale = await _characterService.getAnimationScale();
     if (!mounted) {
       return;
     }
@@ -49,6 +66,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() {
       _showCharacters = showCharacters;
       _autoPlayAnimations = autoPlayAnimations;
+      _animationScale = animationScale;
     });
   }
 
@@ -237,6 +255,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     activeColor: AppTheme.primaryOrange,
                   ),
                 ),
+                _SettingsSliderTile(
+                  icon: Icons.zoom_out_map,
+                  title: 'Animation Scale',
+                  subtitle: '${(_animationScale * 100).round()}%',
+                  value: _animationScale,
+                  min: 0.7,
+                  max: 3.0,
+                  divisions: 23,
+                  onChanged: (value) {
+                    setState(() => _animationScale = value);
+                  },
+                  onChangeEnd: (value) async {
+                    await _characterService.setAnimationScale(value);
+                  },
+                ),
                 _SettingsTile(
                   icon: Icons.fullscreen,
                   title: 'Full Screen Mode',
@@ -321,14 +354,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 _SettingsTile(
                   icon: Icons.info,
                   title: 'Storytime Reader',
-                  subtitle: 'Version 1.0.0',
+                  subtitle: 'Version $_displayVersion',
                   trailing: const SizedBox(),
                 ),
                 _SettingsTile(
                   icon: Icons.help,
                   title: 'Help & Support',
                   subtitle: 'Get help using the app',
-                  onTap: () => _showComingSoon(context),
+                  onTap: () => _showHelpDialog(context),
                   trailing: const Icon(
                     Icons.chevron_right,
                     color: Colors.white54,
@@ -339,6 +372,87 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 40),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showHelpDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.darkBlueMid,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text(
+          'Help & Features',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _HelpSection(
+                  title: 'Home',
+                  items: [
+                    'Continue Reading shows books you have opened and have not finished.',
+                    'Reading Stats tracks books in progress and books finished this month.',
+                    'Quick Find Library searches across your saved books.',
+                  ],
+                ),
+                _HelpSection(
+                  title: 'Library',
+                  items: [
+                    'Open bundled books and imported EPUB books from one shelf.',
+                    'Use search and filters to narrow the shelf by status or format.',
+                    'Reading progress is saved on this device for offline use.',
+                  ],
+                ),
+                _HelpSection(
+                  title: 'Reader',
+                  items: [
+                    'Use the page arrows or page indicator to move through a book.',
+                    'Text controls adjust reading display for EPUB books.',
+                    'Book position, progress, and finished status are saved automatically.',
+                  ],
+                ),
+                _HelpSection(
+                  title: 'Characters',
+                  items: [
+                    'Character animation starts after the book finishes loading.',
+                    'Drag the character anywhere on the page; release to let it react and sprint away.',
+                    'Use Profile settings to turn characters on or off, enable auto-play, and change animation scale.',
+                  ],
+                ),
+                _HelpSection(
+                  title: 'Discover',
+                  items: [
+                    'Project Gutenberg opens in your browser for free public domain classics.',
+                    'Downloaded or imported books remain available offline after they are stored in the app.',
+                  ],
+                ),
+                _HelpSection(
+                  title: 'Profile',
+                  items: [
+                    'Choose app backgrounds, import a custom background, or rotate backgrounds automatically.',
+                    'Show or hide the home stats widget.',
+                    'Reset reading statistics when you want to start fresh.',
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'Close',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -788,14 +902,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 icon = Icons.catching_pokemon;
                 label = 'Pokemon';
                 break;
-              case 'naruto':
-                icon = Icons.local_fire_department;
-                label = 'Naruto';
-                break;
-              case 'ghibli':
-                icon = Icons.animation;
-                label = 'Studio Ghibli';
-                break;
               default:
                 icon = Icons.style;
                 label = 'Default';
@@ -898,6 +1004,71 @@ class _ProfileScreenState extends State<ProfileScreen> {
               );
             },
             child: const Text('Reset', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HelpSection extends StatelessWidget {
+  final String title;
+  final List<String> items;
+
+  const _HelpSection({required this.title, required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...items.map((item) => _HelpBullet(text: item)),
+        ],
+      ),
+    );
+  }
+}
+
+class _HelpBullet extends StatelessWidget {
+  final String text;
+
+  const _HelpBullet({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '- ',
+            style: TextStyle(
+              color: AppTheme.primaryOrange.withValues(alpha: 0.9),
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.72),
+                fontSize: 14,
+                height: 1.35,
+              ),
+            ),
           ),
         ],
       ),
@@ -1011,6 +1182,89 @@ class _SettingsTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SettingsSliderTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final double value;
+  final double min;
+  final double max;
+  final int divisions;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double> onChangeEnd;
+
+  const _SettingsSliderTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.divisions,
+    required this.onChanged,
+    required this.onChangeEnd,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppTheme.primaryOrange.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: AppTheme.primaryOrange, size: 20),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.7),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                Slider(
+                  value: value,
+                  min: min,
+                  max: max,
+                  divisions: divisions,
+                  activeColor: AppTheme.primaryOrange,
+                  inactiveColor: Colors.white.withValues(alpha: 0.18),
+                  onChanged: onChanged,
+                  onChangeEnd: onChangeEnd,
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

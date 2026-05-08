@@ -70,8 +70,11 @@ class EpubService {
       final epubBytes = filePath.startsWith('assets/')
           ? (await rootBundle.load(filePath)).buffer.asUint8List()
           : await File(filePath).readAsBytes();
-      print('[EpubService] metadata-bytes bookId=$bookId bytes=${epubBytes.length} source=$filePath');
+      print(
+        '[EpubService] metadata-bytes bookId=$bookId bytes=${epubBytes.length} source=$filePath',
+      );
       final archive = ZipDecoder().decodeBytes(epubBytes);
+      final unsupportedReason = _detectUnsupportedReason(archive);
       final containerXml = _readArchiveText(archive, 'META-INF/container.xml');
       if (containerXml == null) {
         return Book(
@@ -81,6 +84,7 @@ class EpubService {
           isEpub: true,
           canDelete: canDelete,
           originalFilePath: filePath,
+          unsupportedReason: unsupportedReason,
         );
       }
 
@@ -119,8 +123,11 @@ class EpubService {
         chapters: chapters,
         isEpub: true,
         canDelete: canDelete,
+        unsupportedReason: unsupportedReason,
       );
-      print('[EpubService] metadata-complete bookId=$bookId title="${book.title}" chapters=${book.chapters.length}');
+      print(
+        '[EpubService] metadata-complete bookId=$bookId title="${book.title}" chapters=${book.chapters.length}',
+      );
       return book;
     } catch (e, stackTrace) {
       print('Error loading EPUB metadata only: $e');
@@ -131,6 +138,10 @@ class EpubService {
 
   Future<Book> ensureExtractedForReading(Book book) async {
     if (!book.isEpub) {
+      return book;
+    }
+
+    if (!book.isSupported) {
       return book;
     }
 
@@ -146,10 +157,7 @@ class EpubService {
     }
 
     final extracted = originalFilePath.startsWith('assets/')
-        ? await loadEpubAsset(
-            originalFilePath,
-            canDelete: book.canDelete,
-          )
+        ? await loadEpubAsset(originalFilePath, canDelete: book.canDelete)
         : await loadEpubFile(
             originalFilePath,
             bookId: book.id,
@@ -163,7 +171,9 @@ class EpubService {
     return book.copyWith(
       extractPath: extracted.extractPath,
       coverPath: extracted.coverPath ?? book.coverPath,
-      chapters: extracted.chapters.isNotEmpty ? extracted.chapters : book.chapters,
+      chapters: extracted.chapters.isNotEmpty
+          ? extracted.chapters
+          : book.chapters,
     );
   }
 
@@ -190,10 +200,7 @@ class EpubService {
       id: bookId,
       title: metadata['title'] ?? fallbackTitle,
       author: metadata['author'] ?? 'Unknown',
-      coverPath: _resolveCoverPath(
-        extractDir,
-        metadata['coverPath'],
-      ),
+      coverPath: _resolveCoverPath(extractDir, metadata['coverPath']),
       originalFilePath: sourceKey,
       extractPath: extractDir,
       chapters: chapters,
@@ -222,6 +229,23 @@ class EpubService {
         return String.fromCharCodes(content);
       }
     }
+    return null;
+  }
+
+  String? _detectUnsupportedReason(Archive archive) {
+    final encryptionXml = _readArchiveText(archive, 'META-INF/encryption.xml');
+    final rightsXml = _readArchiveText(archive, 'META-INF/rights.xml');
+    final hasAdobeRights = rightsXml?.toLowerCase().contains('adobe') ?? false;
+    final hasAdeptEncryption =
+        encryptionXml?.toLowerCase().contains('http://ns.adobe.com/adept') ??
+        false;
+    final hasAesEncryption =
+        encryptionXml?.toLowerCase().contains('aes128-cbc') ?? false;
+
+    if (hasAdobeRights || hasAdeptEncryption || hasAesEncryption) {
+      return 'This EPUB is DRM-protected and cannot be opened by Storytime Reader. Please use a DRM-free EPUB file.';
+    }
+
     return null;
   }
 
@@ -266,10 +290,7 @@ class EpubService {
   }
 
   String? _findManifestItemHrefById(String opfContent, String itemId) {
-    final itemRegex = RegExp(
-      '<item\\b[^>]*>',
-      caseSensitive: false,
-    );
+    final itemRegex = RegExp('<item\\b[^>]*>', caseSensitive: false);
 
     for (final match in itemRegex.allMatches(opfContent)) {
       final tag = match.group(0)!;
@@ -285,15 +306,13 @@ class EpubService {
   }
 
   String? _findCoverImageHref(String opfContent) {
-    final itemRegex = RegExp(
-      '<item\\b[^>]*>',
-      caseSensitive: false,
-    );
+    final itemRegex = RegExp('<item\\b[^>]*>', caseSensitive: false);
 
     for (final match in itemRegex.allMatches(opfContent)) {
       final tag = match.group(0)!;
       final properties = _extractAttribute(tag, 'properties');
-      if (properties == null || !properties.toLowerCase().contains('cover-image')) {
+      if (properties == null ||
+          !properties.toLowerCase().contains('cover-image')) {
         continue;
       }
 
@@ -320,7 +339,9 @@ class EpubService {
       return null;
     }
 
-    final normalizedTarget = internalCoverPath.replaceAll('\\', '/').toLowerCase();
+    final normalizedTarget = internalCoverPath
+        .replaceAll('\\', '/')
+        .toLowerCase();
     final normalizedBasename = path.basename(normalizedTarget);
 
     ArchiveFile? matchedEntry;
@@ -344,19 +365,17 @@ class EpubService {
     );
 
     if (!matchedEntry.isFile || matchedEntry.name.isEmpty) {
-      matchedEntry = archive.firstWhere(
-        (entry) {
-          if (!entry.isFile) {
-            return false;
-          }
+      matchedEntry = archive.firstWhere((entry) {
+        if (!entry.isFile) {
+          return false;
+        }
 
-          final entryPath = entry.name.replaceAll('\\', '/').toLowerCase();
-          final extension = path.extension(entryPath);
-          const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
-          return entryPath.contains('cover') && imageExtensions.contains(extension);
-        },
-        orElse: () => ArchiveFile('', 0, []),
-      );
+        final entryPath = entry.name.replaceAll('\\', '/').toLowerCase();
+        final extension = path.extension(entryPath);
+        const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+        return entryPath.contains('cover') &&
+            imageExtensions.contains(extension);
+      }, orElse: () => ArchiveFile('', 0, []));
     }
 
     if (!matchedEntry.isFile || matchedEntry.name.isEmpty) {

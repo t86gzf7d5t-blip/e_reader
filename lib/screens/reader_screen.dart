@@ -41,6 +41,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   final BackgroundService _backgroundService = BackgroundService();
   bool _showCharacters = true;
   bool _autoPlayCharacterAnimations = true;
+  double _characterAnimationScale = 1.0;
   List<CharacterManifest> _characters = const [];
   String _characterStyle = 'default';
   int _characterSceneTrigger = 0;
@@ -90,6 +91,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _trackBookOpen() async {
+    if (!widget.book.isSupported) {
+      return;
+    }
+
     await _statsService.init();
     final status = await _statsService.getBookStatus(widget.book.id);
 
@@ -113,6 +118,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Future<void> _loadCharacterOverlayState() async {
     final showCharacters = await _characterService.getShowCharacters();
     final autoPlayAnimations = await _characterService.getAutoPlayAnimations();
+    final animationScale = await _characterService.getAnimationScale();
     await _backgroundService.init();
     final currentStyle = await _backgroundService.getCurrentAnimationStyle();
     final availableCharacters = await _characterService
@@ -124,6 +130,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     setState(() {
       _showCharacters = showCharacters;
       _autoPlayCharacterAnimations = autoPlayAnimations;
+      _characterAnimationScale = animationScale;
       _characters = availableCharacters
           .where((character) => character.hasIdleFrames)
           .take(1)
@@ -219,10 +226,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
         if (pendingRegions != null) {
           _safeRegions = pendingRegions;
         }
-        if (pendingPage != null &&
-            pendingPage != _lastSettledCharacterScenePage) {
+        final settledPage = pendingPage ?? _currentPage;
+        if (settledPage != _lastSettledCharacterScenePage) {
           _characterSceneTrigger++;
-          _lastSettledCharacterScenePage = pendingPage;
+          _lastSettledCharacterScenePage = settledPage;
         }
       });
     });
@@ -392,6 +399,20 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
 
     return _actualTotalPages != null && _actualTotalPages! > 1;
+  }
+
+  bool get _characterSceneCanStart {
+    if (!widget.book.isEpub) {
+      return !_isLoading;
+    }
+
+    return _actualTotalPages != null && _lastSettledCharacterScenePage != null;
+  }
+
+  bool get _animationRegionEnabled {
+    return _showCharacters &&
+        _autoPlayCharacterAnimations &&
+        _characters.isNotEmpty;
   }
 
   int get _displayedTotalPages {
@@ -781,45 +802,66 @@ class _ReaderScreenState extends State<ReaderScreen> {
           children: [
             _buildAppBar(),
             Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: BookPageView(
-                      book: widget.book.isEpub && _savedCfi != null
-                          ? widget.book.copyWith(lastPositionCfi: _savedCfi)
-                          : widget.book,
-                      currentPage: _currentPage,
-                      pageController: _pageController,
-                      viewMode: _viewMode,
-                      fontSize: _fontSize,
-                      onPageChanged: _onPageChanged,
-                      onPositionChanged: _onPositionChanged,
-                      onTableOfContentsChanged: widget.book.isEpub
-                          ? _onTableOfContentsChanged
-                          : null,
-                      onSafeRegionsChanged: widget.book.isEpub
-                          ? _onSafeRegionsChanged
-                          : null,
-                      onTotalPagesChanged: widget.book.isEpub
-                          ? _onTotalPagesChanged
-                          : null,
-                      epubReaderKey: widget.book.isEpub ? _epubReaderKey : null,
-                      restorePageHint: widget.book.isEpub
-                          ? _restorePageHint
-                          : null,
-                      restoreTotalPagesHint: widget.book.isEpub
-                          ? _restoreTotalPagesHint
-                          : null,
-                    ),
-                  ),
-                  if (_showCharacters && _characters.isNotEmpty)
-                    Positioned.fill(
-                      child: SingleCharacterSceneOverlay(
-                        character: _characters.first,
-                        autoPlay: _autoPlayCharacterAnimations,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final animationLayerHeight = (constraints.maxHeight * 0.18)
+                      .clamp(112.0, 172.0);
+                  final animationRegionEnabled = _animationRegionEnabled;
+
+                  return Stack(
+                    children: [
+                      Positioned.fill(child: Container(color: Colors.white)),
+                      Positioned.fill(
+                        bottom: animationRegionEnabled
+                            ? animationLayerHeight
+                            : 0,
+                        child: ClipRect(
+                          child: BookPageView(
+                            book: widget.book.isEpub && _savedCfi != null
+                                ? widget.book.copyWith(
+                                    lastPositionCfi: _savedCfi,
+                                  )
+                                : widget.book,
+                            currentPage: _currentPage,
+                            pageController: _pageController,
+                            viewMode: _viewMode,
+                            fontSize: _fontSize,
+                            onPageChanged: _onPageChanged,
+                            onPositionChanged: _onPositionChanged,
+                            onTableOfContentsChanged: widget.book.isEpub
+                                ? _onTableOfContentsChanged
+                                : null,
+                            onSafeRegionsChanged: widget.book.isEpub
+                                ? _onSafeRegionsChanged
+                                : null,
+                            onTotalPagesChanged: widget.book.isEpub
+                                ? _onTotalPagesChanged
+                                : null,
+                            epubReaderKey: widget.book.isEpub
+                                ? _epubReaderKey
+                                : null,
+                            restorePageHint: widget.book.isEpub
+                                ? _restorePageHint
+                                : null,
+                            restoreTotalPagesHint: widget.book.isEpub
+                                ? _restoreTotalPagesHint
+                                : null,
+                          ),
+                        ),
                       ),
-                    ),
-                ],
+                      if (animationRegionEnabled)
+                        Positioned.fill(
+                          child: SingleCharacterSceneOverlay(
+                            character: _characters.first,
+                            autoPlay: _autoPlayCharacterAnimations,
+                            canStart: _characterSceneCanStart,
+                            homeRegionHeight: animationLayerHeight,
+                            scaleMultiplier: _characterAnimationScale,
+                          ),
+                        ),
+                    ],
+                  );
+                },
               ),
             ),
             _buildPageIndicator(),

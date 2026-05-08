@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -18,16 +19,16 @@ class EpubLibraryService {
   static const int _metadataLoadBatchSize = 3;
   static const Duration _metadataTimeout = Duration(seconds: 12);
 
-  // Keep this list small and stable so every build has a predictable starter shelf.
-  static const List<String> _starterSeedAssets = [
-    'assets/imported/pg11-images-3.epub',
-    'assets/imported/pg14838-images-3.epub',
-    'assets/imported/pg37106-images-3.epub',
-    'assets/imported/pg12-images-3.epub',
-    'assets/imported/pg55-images-3.epub',
-    'assets/imported/pg84-images-3.epub',
-    'assets/imported/pg100-images-3.epub',
-    'assets/imported/pg1342-images-3.epub',
+  static const String _bundledEpubAssetDirectory = 'assets/imported/';
+  static const List<String> _fallbackBundledEpubAssets = [
+    'assets/imported/Pete the Cat and the Perfect Pizza Party.epub',
+    'assets/imported/pg11757-images-3.epub',
+    'assets/imported/pg236-images-3.epub',
+    'assets/imported/pg25609-images-3.epub',
+    'assets/imported/pg2591-images-3.epub',
+    'assets/imported/pg27805-images-3.epub',
+    'assets/imported/pg45-images-3.epub',
+    'assets/imported/pg67098-images-3.epub',
   ];
 
   // Add gift-ready built-in books here. They are seeded once, then behave like imports.
@@ -60,7 +61,9 @@ class EpubLibraryService {
                 .timeout(
                   _metadataTimeout,
                   onTimeout: () {
-                    print('Timed out loading EPUB metadata ${entry.originalFilePath}');
+                    print(
+                      'Timed out loading EPUB metadata ${entry.originalFilePath}',
+                    );
                     return _fallbackBookForEntry(entry);
                   },
                 );
@@ -159,12 +162,30 @@ class EpubLibraryService {
   Future<void> _seedBundledBooksIfNeeded() async {
     final registry = await _loadEntries();
     final deletedSeeds = await _loadDeletedSeedAssets();
+    final bundledAssets = await _discoverBundledEpubAssets();
+    final bundledAssetSet = bundledAssets
+        .map((asset) => asset.toLowerCase())
+        .toSet();
     var changed = false;
     print(
-      '[EpubLibrary] seed-start registry=${registry.length} deleted=${deletedSeeds.length}',
+      '[EpubLibrary] seed-start registry=${registry.length} bundled=${bundledAssets.length} deleted=${deletedSeeds.length}',
     );
 
-    for (final assetPath in [..._starterSeedAssets, ..._giftSeedAssets]) {
+    registry.removeWhere((entry) {
+      final seedAssetPath = entry.seedAssetPath;
+      if (seedAssetPath == null) {
+        return false;
+      }
+
+      final isStale = !bundledAssetSet.contains(seedAssetPath.toLowerCase());
+      if (isStale) {
+        print('[EpubLibrary] seed-remove-stale ${entry.id} -> $seedAssetPath');
+        changed = true;
+      }
+      return isStale;
+    });
+
+    for (final assetPath in [...bundledAssets, ..._giftSeedAssets]) {
       final normalizedAssetPath = assetPath.toLowerCase();
 
       final existingIndex = registry.indexWhere(
@@ -186,7 +207,9 @@ class EpubLibraryService {
           ),
         );
         changed = true;
-      } else if (!registry[existingIndex].originalFilePath.startsWith('assets/')) {
+      } else if (!registry[existingIndex].originalFilePath.startsWith(
+        'assets/',
+      )) {
         print(
           '[EpubLibrary] seed-migrate ${registry[existingIndex].id} -> $assetPath',
         );
@@ -203,7 +226,36 @@ class EpubLibraryService {
     if (changed) {
       await _saveEntries(registry);
     }
-    print('[EpubLibrary] seed-complete registry=${registry.length} changed=$changed');
+    print(
+      '[EpubLibrary] seed-complete registry=${registry.length} changed=$changed',
+    );
+  }
+
+  Future<List<String>> _discoverBundledEpubAssets() async {
+    final discovered = <String>{};
+
+    try {
+      final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+      for (final assetPath in manifest.listAssets()) {
+        if (_isBundledEpubAsset(assetPath)) {
+          discovered.add(Uri.decodeFull(assetPath));
+        }
+      }
+    } catch (e) {
+      print('[EpubLibrary] asset-manifest-scan-failed: $e');
+    }
+
+    if (discovered.isEmpty) {
+      discovered.addAll(_fallbackBundledEpubAssets);
+    }
+
+    return discovered.toList()..sort();
+  }
+
+  bool _isBundledEpubAsset(String assetPath) {
+    final decodedPath = Uri.decodeFull(assetPath);
+    return decodedPath.startsWith(_bundledEpubAssetDirectory) &&
+        decodedPath.toLowerCase().endsWith('.epub');
   }
 
   Book _fallbackBookForEntry(_LibraryBookEntry entry) {
@@ -240,7 +292,9 @@ class EpubLibraryService {
 
     final decoded = json.decode(rawEntries) as List<dynamic>;
     final entries = decoded
-        .map((entry) => _LibraryBookEntry.fromJson(entry as Map<String, dynamic>))
+        .map(
+          (entry) => _LibraryBookEntry.fromJson(entry as Map<String, dynamic>),
+        )
         .toList();
 
     entries.sort((a, b) => a.addedAt.compareTo(b.addedAt));

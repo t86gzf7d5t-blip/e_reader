@@ -147,10 +147,39 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   void _openBook(Book book) {
+    if (!book.isSupported) {
+      _showUnsupportedBookDialog(book);
+      return;
+    }
+
     Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => ReaderScreen(book: book)),
     ).then((_) => _loadBooks());
+  }
+
+  void _showUnsupportedBookDialog(Book book) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1F2E),
+        title: const Text(
+          'Cannot Open Book',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Text(
+          book.unsupportedReason ??
+              'This book format is not supported by Storytime Reader.',
+          style: TextStyle(color: Colors.white.withOpacity(0.8)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _importBook() async {
