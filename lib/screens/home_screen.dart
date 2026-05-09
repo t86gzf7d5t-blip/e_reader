@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../services/book_service.dart';
@@ -1164,14 +1165,47 @@ class _QuickFindChip extends StatelessWidget {
   }
 }
 
-class _BookCoverArt extends StatelessWidget {
+class _BookCoverArt extends StatefulWidget {
   final Book book;
 
   const _BookCoverArt({required this.book});
 
   @override
+  State<_BookCoverArt> createState() => _BookCoverArtState();
+}
+
+class _BookCoverArtState extends State<_BookCoverArt> {
+  Timer? _coverRetryTimer;
+  int _coverRetryCount = 0;
+
+  @override
+  void dispose() {
+    _coverRetryTimer?.cancel();
+    super.dispose();
+  }
+
+  void _schedulePdfCoverRetry(String coverPath) {
+    if (!widget.book.isPdf ||
+        _coverRetryTimer != null ||
+        _coverRetryCount >= 8) {
+      return;
+    }
+
+    _coverRetryCount++;
+    _coverRetryTimer = Timer(const Duration(seconds: 2), () {
+      _coverRetryTimer = null;
+      if (!mounted) {
+        return;
+      }
+      if (File(coverPath).existsSync() || _coverRetryCount < 8) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final coverPath = book.coverPath;
+    final coverPath = widget.book.coverPath;
     if (coverPath != null && coverPath.isNotEmpty) {
       final coverFile = File(coverPath);
       if (coverFile.existsSync()) {
@@ -1183,6 +1217,7 @@ class _BookCoverArt extends StatelessWidget {
           },
         );
       }
+      _schedulePdfCoverRetry(coverPath);
     }
 
     return _fallbackCover();

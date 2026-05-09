@@ -331,7 +331,7 @@ class PdfBookViewState extends State<PdfBookView> {
   }
 }
 
-class _PdfSpreadView extends StatelessWidget {
+class _PdfSpreadView extends StatefulWidget {
   final PdfDocument document;
   final PageController pageController;
   final Map<int, Future<PdfPageImage?>> pageFutures;
@@ -344,13 +344,30 @@ class _PdfSpreadView extends StatelessWidget {
     this.onPageChanged,
   });
 
+  @override
+  State<_PdfSpreadView> createState() => _PdfSpreadViewState();
+}
+
+class _PdfSpreadViewState extends State<_PdfSpreadView> {
+  bool _isZoomed = false;
+
+  void _handleZoomChanged(bool isZoomed) {
+    if (_isZoomed == isZoomed) {
+      return;
+    }
+
+    setState(() {
+      _isZoomed = isZoomed;
+    });
+  }
+
   Future<PdfPageImage?> _renderPage(int pageNumber) {
-    return pageFutures.putIfAbsent(pageNumber, () async {
-      final page = await document.getPage(pageNumber);
+    return widget.pageFutures.putIfAbsent(pageNumber, () async {
+      final page = await widget.document.getPage(pageNumber);
       try {
         return page.render(
-          width: page.width * 2,
-          height: page.height * 2,
+          width: page.width * 3,
+          height: page.height * 3,
           format: PdfPageImageFormat.png,
           backgroundColor: '#FFFFFF',
         );
@@ -362,18 +379,21 @@ class _PdfSpreadView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final totalSpreads = (document.pagesCount / 2).ceil();
+    final totalSpreads = (widget.document.pagesCount / 2).ceil();
 
     return PageView.builder(
-      controller: pageController,
-      physics: const ReaderSwipePhysics(),
+      controller: widget.pageController,
+      physics: _isZoomed
+          ? const NeverScrollableScrollPhysics()
+          : const ReaderSwipePhysics(),
       itemCount: totalSpreads,
-      onPageChanged: onPageChanged,
+      onPageChanged: widget.onPageChanged,
       itemBuilder: (context, spreadIndex) {
         final leftPage = spreadIndex * 2 + 1;
         final rightPage = leftPage + 1;
 
         return _PdfZoomSurface(
+          onZoomChanged: _handleZoomChanged,
           child: Row(
             children: [
               Expanded(
@@ -384,7 +404,7 @@ class _PdfSpreadView extends StatelessWidget {
               ),
               const SizedBox(width: 0),
               Expanded(
-                child: rightPage <= document.pagesCount
+                child: rightPage <= widget.document.pagesCount
                     ? _PdfRenderedPage(
                         pageFuture: _renderPage(rightPage),
                         alignment: Alignment.centerLeft,
@@ -406,8 +426,9 @@ class _PdfSpreadView extends StatelessWidget {
 
 class _PdfZoomSurface extends StatefulWidget {
   final Widget child;
+  final ValueChanged<bool>? onZoomChanged;
 
-  const _PdfZoomSurface({required this.child});
+  const _PdfZoomSurface({required this.child, this.onZoomChanged});
 
   @override
   State<_PdfZoomSurface> createState() => _PdfZoomSurfaceState();
@@ -431,6 +452,7 @@ class _PdfZoomSurfaceState extends State<_PdfZoomSurface> {
     final currentScale = _controller.value.getMaxScaleOnAxis();
     if (currentScale > 1.05) {
       _controller.value = Matrix4.identity();
+      widget.onZoomChanged?.call(false);
       return;
     }
 
@@ -441,22 +463,34 @@ class _PdfZoomSurfaceState extends State<_PdfZoomSurface> {
       ..setEntry(1, 1, zoomScale)
       ..setEntry(0, 3, -position.dx * (zoomScale - 1))
       ..setEntry(1, 3, -position.dy * (zoomScale - 1));
+    widget.onZoomChanged?.call(true);
+  }
+
+  void _handleInteractionUpdate(ScaleUpdateDetails details) {
+    widget.onZoomChanged?.call(_controller.value.getMaxScaleOnAxis() > 1.05);
+  }
+
+  void _handleInteractionEnd(ScaleEndDetails details) {
+    widget.onZoomChanged?.call(_controller.value.getMaxScaleOnAxis() > 1.05);
   }
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onDoubleTapDown: _handleDoubleTapDown,
       onDoubleTap: _handleDoubleTap,
       child: InteractiveViewer(
         transformationController: _controller,
         minScale: 1.0,
-        maxScale: 4.0,
+        maxScale: 5.0,
         panEnabled: true,
         scaleEnabled: true,
-        boundaryMargin: const EdgeInsets.all(120),
+        onInteractionUpdate: _handleInteractionUpdate,
+        onInteractionEnd: _handleInteractionEnd,
+        boundaryMargin: const EdgeInsets.all(240),
         clipBehavior: Clip.hardEdge,
-        child: widget.child,
+        child: SizedBox.expand(child: widget.child),
       ),
     );
   }
@@ -497,7 +531,7 @@ class _PdfRenderedPage extends StatelessWidget {
 
           return Image.memory(
             image.bytes,
-            fit: BoxFit.contain,
+            fit: BoxFit.fitHeight,
             alignment: alignment,
             gaplessPlayback: true,
           );

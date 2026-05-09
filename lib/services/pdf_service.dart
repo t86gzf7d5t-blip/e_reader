@@ -125,8 +125,8 @@ class PdfService {
           .basenameWithoutExtension(sourcePath)
           .replaceAll('_', ' ')
           .replaceAll('-', ' ');
-      final coverPath = await _cachedPdfCoverPath(resolvedBookId);
-      if (coverPath == null) {
+      final coverPath = await _pdfCoverPath(resolvedBookId);
+      if (!await File(coverPath).exists()) {
         unawaited(_ensurePdfCoverImage(sourcePath, resolvedBookId));
       }
 
@@ -147,12 +147,12 @@ class PdfService {
     }
   }
 
-  Future<String?> _cachedPdfCoverPath(String bookId) async {
+  Future<String> _pdfCoverPath(String bookId) async {
     final appDir = await AppStorageService.documentsDirectory();
     final coverFile = File(
       path.join(appDir.path, 'library', 'pdf_covers', '$bookId.png'),
     );
-    return await coverFile.exists() ? coverFile.path : null;
+    return coverFile.path;
   }
 
   Future<String?> _ensurePdfCoverImage(String sourcePath, String bookId) async {
