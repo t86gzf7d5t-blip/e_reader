@@ -71,6 +71,13 @@ class DiscoverScreen extends StatelessWidget {
                   color: const Color(0xFF4CAF50),
                   onTap: () => _launchUrl('https://www.gutenberg.org/'),
                 ),
+                _LinkCard(
+                  icon: Icons.collections_bookmark,
+                  title: 'Library of Congress',
+                  subtitle: 'Historic collections, archives, and books',
+                  color: const Color(0xFF3F51B5),
+                  onTap: () => _launchUrl('https://read.gov/'),
+                ),
                 const SizedBox(height: 40),
               ]),
             ),
