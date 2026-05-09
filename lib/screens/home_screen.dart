@@ -230,7 +230,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         content: Text(
           book.unsupportedReason ??
-              'This book format is not supported by Storytime Reader.',
+              'This book format is not supported by Nectar & Sol.',
           style: TextStyle(color: Colors.white.withOpacity(0.8)),
         ),
         actions: [

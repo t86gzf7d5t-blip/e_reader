@@ -1,7 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
+import 'package:pdfx/pdfx.dart';
 import '../models/book.dart';
 import '../models/reader_safe_region.dart';
 import '../services/epub_service.dart';
@@ -23,6 +27,7 @@ class BookPageView extends StatelessWidget {
   final Function(int totalPages)?
   onTotalPagesChanged; // For EPUB to report actual page count
   final Key? epubReaderKey; // Key for accessing EpubJsReaderState
+  final Key? pdfReaderKey; // Key for accessing PdfBookViewState
   final int? restorePageHint; // Zero-based logical page hint for EPUB restore
   final int? restoreTotalPagesHint;
 
@@ -39,6 +44,7 @@ class BookPageView extends StatelessWidget {
     this.onSafeRegionsChanged,
     this.onTotalPagesChanged,
     this.epubReaderKey,
+    this.pdfReaderKey,
     this.restorePageHint,
     this.restoreTotalPagesHint,
   });
@@ -62,6 +68,15 @@ class BookPageView extends StatelessWidget {
         restorePageHint: restorePageHint,
         restoreTotalPagesHint: restoreTotalPagesHint,
       );
+    } else if (book.isPdf) {
+      return PdfBookView(
+        key: pdfReaderKey,
+        book: book,
+        pageController: pageController,
+        viewMode: viewMode,
+        onPageChanged: onPageChanged,
+        onTotalPagesChanged: onTotalPagesChanged,
+      );
     } else {
       // Use image-based reader for picture books
       return _ImageBookView(
@@ -71,6 +86,424 @@ class BookPageView extends StatelessWidget {
         onPageChanged: onPageChanged,
       );
     }
+  }
+}
+
+class PdfBookView extends StatefulWidget {
+  final Book book;
+  final PageController pageController;
+  final PageViewMode viewMode;
+  final Function(int)? onPageChanged;
+  final Function(int totalPages)? onTotalPagesChanged;
+
+  const PdfBookView({
+    super.key,
+    required this.book,
+    required this.pageController,
+    required this.viewMode,
+    this.onPageChanged,
+    this.onTotalPagesChanged,
+  });
+
+  @override
+  State<PdfBookView> createState() => PdfBookViewState();
+}
+
+class PdfBookViewState extends State<PdfBookView> {
+  PdfController? _controller;
+  PdfDocument? _spreadDocument;
+  int _pagesCount = 1;
+  Object? _loadError;
+  String? _resolvedFilePath;
+  final Map<int, Future<PdfPageImage?>> _renderedSpreadPages = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _openController();
+  }
+
+  @override
+  void didUpdateWidget(PdfBookView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.book.originalFilePath != widget.book.originalFilePath) {
+      _openController();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    _spreadDocument?.close();
+    super.dispose();
+  }
+
+  Future<void> _openController() async {
+    _controller?.dispose();
+    await _spreadDocument?.close();
+    _controller = null;
+    _spreadDocument = null;
+    _loadError = null;
+    _resolvedFilePath = null;
+    _renderedSpreadPages.clear();
+
+    final sourcePath =
+        widget.book.originalFilePath ??
+        widget.book.pages.firstOrNull?.imagePath;
+    if (sourcePath == null || sourcePath.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _loadError = 'PDF file path is missing';
+        });
+      }
+      return;
+    }
+
+    try {
+      final filePath = sourcePath.startsWith('assets/')
+          ? await _copyAssetPdfToCache(sourcePath)
+          : sourcePath;
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _resolvedFilePath = filePath;
+        _controller = PdfController(document: PdfDocument.openFile(filePath));
+      });
+
+      final document = await PdfDocument.openFile(filePath);
+      if (!mounted || _resolvedFilePath != filePath) {
+        await document.close();
+        return;
+      }
+
+      setState(() {
+        _spreadDocument = document;
+        _pagesCount = document.pagesCount;
+      });
+      widget.onTotalPagesChanged?.call(document.pagesCount);
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loadError = e;
+      });
+    }
+  }
+
+  Future<String> _copyAssetPdfToCache(String assetPath) async {
+    final data = await rootBundle.load(assetPath);
+    final cacheDir = await getTemporaryDirectory();
+    final pdfDir = Directory(path.join(cacheDir.path, 'bundled_pdfs'));
+    if (!await pdfDir.exists()) {
+      await pdfDir.create(recursive: true);
+    }
+
+    final fileName = path.basename(assetPath);
+    final outputFile = File(path.join(pdfDir.path, fileName));
+    final expectedLength = data.lengthInBytes;
+    if (!await outputFile.exists() ||
+        await outputFile.length() != expectedLength) {
+      await outputFile.writeAsBytes(
+        data.buffer.asUint8List(data.offsetInBytes, expectedLength),
+        flush: true,
+      );
+    }
+    return outputFile.path;
+  }
+
+  void nextPage() {
+    if (widget.viewMode == PageViewMode.spread) {
+      widget.pageController.nextPage(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+      return;
+    }
+
+    _controller?.nextPage(
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void prevPage() {
+    if (widget.viewMode == PageViewMode.spread) {
+      widget.pageController.previousPage(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+      return;
+    }
+
+    _controller?.previousPage(
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void goToPage(int pageNumber) {
+    final targetPage = pageNumber.clamp(1, _pagesCount);
+    if (widget.viewMode == PageViewMode.spread) {
+      widget.pageController.animateToPage(
+        (targetPage - 1) ~/ 2,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+      return;
+    }
+
+    _controller?.animateToPage(
+      targetPage,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    if (_loadError != null) {
+      return Center(
+        child: Text(
+          'Could not load PDF\n$_loadError',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.white70),
+        ),
+      );
+    }
+
+    if (controller == null || _resolvedFilePath == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (widget.viewMode == PageViewMode.spread) {
+      final document = _spreadDocument;
+      if (document == null) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
+      return _PdfSpreadView(
+        document: document,
+        pageController: widget.pageController,
+        pageFutures: _renderedSpreadPages,
+        onPageChanged: widget.onPageChanged,
+      );
+    }
+
+    return _PdfZoomSurface(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: PdfView(
+          controller: controller,
+          scrollDirection: Axis.horizontal,
+          onDocumentLoaded: (document) {
+            _pagesCount = document.pagesCount;
+            widget.onTotalPagesChanged?.call(document.pagesCount);
+          },
+          onDocumentError: (error) {
+            debugPrint('PDF document error: $error');
+          },
+          onPageChanged: (page) => widget.onPageChanged?.call(page - 1),
+          builders: PdfViewBuilders<DefaultBuilderOptions>(
+            options: const DefaultBuilderOptions(),
+            documentLoaderBuilder: (_) =>
+                const Center(child: CircularProgressIndicator()),
+            pageLoaderBuilder: (_) =>
+                const Center(child: CircularProgressIndicator()),
+            errorBuilder: (_, error) => Container(
+              color: Colors.grey[300],
+              child: Center(
+                child: Text(
+                  'Could not load PDF\n$error',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PdfSpreadView extends StatelessWidget {
+  final PdfDocument document;
+  final PageController pageController;
+  final Map<int, Future<PdfPageImage?>> pageFutures;
+  final Function(int)? onPageChanged;
+
+  const _PdfSpreadView({
+    required this.document,
+    required this.pageController,
+    required this.pageFutures,
+    this.onPageChanged,
+  });
+
+  Future<PdfPageImage?> _renderPage(int pageNumber) {
+    return pageFutures.putIfAbsent(pageNumber, () async {
+      final page = await document.getPage(pageNumber);
+      try {
+        return page.render(
+          width: page.width * 2,
+          height: page.height * 2,
+          format: PdfPageImageFormat.png,
+          backgroundColor: '#FFFFFF',
+        );
+      } finally {
+        await page.close();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final totalSpreads = (document.pagesCount / 2).ceil();
+
+    return PageView.builder(
+      controller: pageController,
+      physics: const ReaderSwipePhysics(),
+      itemCount: totalSpreads,
+      onPageChanged: onPageChanged,
+      itemBuilder: (context, spreadIndex) {
+        final leftPage = spreadIndex * 2 + 1;
+        final rightPage = leftPage + 1;
+
+        return _PdfZoomSurface(
+          child: Row(
+            children: [
+              Expanded(
+                child: _PdfRenderedPage(
+                  pageFuture: _renderPage(leftPage),
+                  alignment: Alignment.centerRight,
+                ),
+              ),
+              const SizedBox(width: 0),
+              Expanded(
+                child: rightPage <= document.pagesCount
+                    ? _PdfRenderedPage(
+                        pageFuture: _renderPage(rightPage),
+                        alignment: Alignment.centerLeft,
+                      )
+                    : Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PdfZoomSurface extends StatefulWidget {
+  final Widget child;
+
+  const _PdfZoomSurface({required this.child});
+
+  @override
+  State<_PdfZoomSurface> createState() => _PdfZoomSurfaceState();
+}
+
+class _PdfZoomSurfaceState extends State<_PdfZoomSurface> {
+  final TransformationController _controller = TransformationController();
+  TapDownDetails? _doubleTapDetails;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _handleDoubleTapDown(TapDownDetails details) {
+    _doubleTapDetails = details;
+  }
+
+  void _handleDoubleTap() {
+    final currentScale = _controller.value.getMaxScaleOnAxis();
+    if (currentScale > 1.05) {
+      _controller.value = Matrix4.identity();
+      return;
+    }
+
+    const zoomScale = 2.0;
+    final position = _doubleTapDetails?.localPosition ?? Offset.zero;
+    _controller.value = Matrix4.identity()
+      ..setEntry(0, 0, zoomScale)
+      ..setEntry(1, 1, zoomScale)
+      ..setEntry(0, 3, -position.dx * (zoomScale - 1))
+      ..setEntry(1, 3, -position.dy * (zoomScale - 1));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onDoubleTapDown: _handleDoubleTapDown,
+      onDoubleTap: _handleDoubleTap,
+      child: InteractiveViewer(
+        transformationController: _controller,
+        minScale: 1.0,
+        maxScale: 4.0,
+        panEnabled: true,
+        scaleEnabled: true,
+        boundaryMargin: const EdgeInsets.all(120),
+        clipBehavior: Clip.hardEdge,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+class _PdfRenderedPage extends StatelessWidget {
+  final Future<PdfPageImage?> pageFuture;
+  final Alignment alignment;
+
+  const _PdfRenderedPage({
+    required this.pageFuture,
+    this.alignment = Alignment.center,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: FutureBuilder<PdfPageImage?>(
+        future: pageFuture,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Container(
+              color: Colors.grey[300],
+              alignment: Alignment.center,
+              child: Text(
+                'Could not render PDF page\n${snapshot.error}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+            );
+          }
+
+          final image = snapshot.data;
+          if (image == null) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          return Image.memory(
+            image.bytes,
+            fit: BoxFit.contain,
+            alignment: alignment,
+            gaplessPlayback: true,
+          );
+        },
+      ),
+    );
   }
 }
 
@@ -182,7 +615,9 @@ class EpubJsReaderState extends State<EpubJsReader> {
   }
 
   Future<void> _startLocalServer() async {
-    final preparedBook = await _epubService.ensureExtractedForReading(widget.book);
+    final preparedBook = await _epubService.ensureExtractedForReading(
+      widget.book,
+    );
     if (_isDisposed || !mounted) {
       return;
     }
@@ -375,11 +810,7 @@ class EpubJsReaderState extends State<EpubJsReader> {
     );
   }
 
-  void _restorePosition(
-    String cfi, {
-    int? pageHint,
-    int? totalPagesHint,
-  }) {
+  void _restorePosition(String cfi, {int? pageHint, int? totalPagesHint}) {
     final options = <String>[];
     if (pageHint != null) {
       options.add('pageHint: ${pageHint + 1}');
@@ -486,13 +917,7 @@ class EpubJsReaderState extends State<EpubJsReader> {
                 continue;
               }
 
-              parsedChapters.add(
-                Chapter(
-                  title: title,
-                  href: href,
-                  order: i,
-                ),
-              );
+              parsedChapters.add(Chapter(title: title, href: href, order: i));
             }
 
             widget.onTableOfContentsChanged?.call(parsedChapters);
@@ -509,9 +934,7 @@ class EpubJsReaderState extends State<EpubJsReader> {
                     Map<String, dynamic>.from(region),
                   ),
                 )
-                .where(
-                  (region) => region.width > 0.05 && region.height > 0.05,
-                )
+                .where((region) => region.width > 0.05 && region.height > 0.05)
                 .toList(growable: false);
 
             widget.onSafeRegionsChanged?.call(parsed);
@@ -541,19 +964,13 @@ class EpubJsReaderState extends State<EpubJsReader> {
   }
 
   void restorePosition(String cfi, {int? pageHint, int? totalPagesHint}) {
-    _restorePosition(
-      cfi,
-      pageHint: pageHint,
-      totalPagesHint: totalPagesHint,
-    );
+    _restorePosition(cfi, pageHint: pageHint, totalPagesHint: totalPagesHint);
   }
 
   @override
   Widget build(BuildContext context) {
     if (!_isReady || _serverUrl == null) {
-      return const Center(
-        child: CircularProgressIndicator(),
-      );
+      return const Center(child: CircularProgressIndicator());
     }
 
     return Stack(
@@ -678,9 +1095,7 @@ class _ImageSpreadView extends StatelessWidget {
       controller: pageController,
       physics: const ReaderSwipePhysics(),
       itemCount: totalSpreads,
-      onPageChanged: (index) {
-        onPageChanged?.call(index * 2);
-      },
+      onPageChanged: onPageChanged,
       itemBuilder: (context, spreadIndex) {
         final leftPageIndex = spreadIndex * 2;
         final rightPageIndex = leftPageIndex + 1;

@@ -33,7 +33,6 @@ flutter:
 
   assets:
     - assets/books/
-    - assets/books/story_1/
     - assets/characters/
     - assets/characters/placeholder/
     - assets/characters/character_a/storybook/

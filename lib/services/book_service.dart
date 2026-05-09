@@ -6,7 +6,7 @@ import 'pdf_service.dart';
 
 class BookService {
   static const String _booksBasePath = 'assets/books';
-  static const List<String> _knownBooks = ['story_1'];
+  static const List<String> _knownBooks = [];
   static Future<List<Book>>? _inFlightLoad;
   static List<Book>? _cachedBooks;
   final EpubLibraryService _epubLibraryService = EpubLibraryService();

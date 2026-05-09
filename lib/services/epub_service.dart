@@ -243,7 +243,7 @@ class EpubService {
         encryptionXml?.toLowerCase().contains('aes128-cbc') ?? false;
 
     if (hasAdobeRights || hasAdeptEncryption || hasAesEncryption) {
-      return 'This EPUB is DRM-protected and cannot be opened by Storytime Reader. Please use a DRM-free EPUB file.';
+      return 'This EPUB is DRM-protected and cannot be opened by Nectar & Sol. Please use a DRM-free EPUB file.';
     }
 
     return null;

@@ -21,7 +21,7 @@ class EReaderApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Storytime Reader',
+      title: 'Nectar & Sol',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,

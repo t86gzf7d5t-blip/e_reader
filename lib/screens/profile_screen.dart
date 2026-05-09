@@ -353,7 +353,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               children: [
                 _SettingsTile(
                   icon: Icons.info,
-                  title: 'Storytime Reader',
+                  title: 'Nectar & Sol',
                   subtitle: 'Version $_displayVersion',
                   trailing: const SizedBox(),
                 ),
@@ -465,7 +465,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Import Book', style: TextStyle(color: Colors.white)),
         content: const Text(
-          'Supported formats:\n• Image folders (ZIP)\n• Image folders\n\nComing soon:\n• PDF files\n• EPUB files',
+          'Supported formats:\n• EPUB files\n• PDF files\n• Image folders (ZIP)\n• Image folders',
           style: TextStyle(color: Colors.white70),
         ),
         actions: [

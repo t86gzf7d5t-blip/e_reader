@@ -25,6 +25,7 @@ class BackgroundService extends ChangeNotifier {
   SharedPreferences? _prefs;
   String? _currentBackground;
   DateTime? _lastRotation;
+  bool _initialized = false;
 
   // Current background getter
   String? get currentBackground => _currentBackground;
@@ -35,12 +36,17 @@ class BackgroundService extends ChangeNotifier {
   BackgroundService._internal();
 
   Future<void> init() async {
+    if (_initialized) {
+      return;
+    }
+
     _prefs = await SharedPreferences.getInstance();
     _lastRotation = DateTime.tryParse(
       _prefs?.getString(_lastRotationKey) ?? '',
     );
     // Auto-scan backgrounds on startup
     await _scanAssetBackgrounds();
+    _initialized = true;
   }
 
   /// Auto-scan assets/backgrounds folder for new images
@@ -66,23 +72,14 @@ class BackgroundService extends ChangeNotifier {
 
     // If manifest didn't work, try all known background filenames
     if (scanned.isEmpty) {
-      final testFiles = [
+      scanned.addAll([
         'assets/backgrounds/Mountain path to Victory Road.png',
         'assets/backgrounds/Idyllic countryside village under a blue sky.png',
         'assets/backgrounds/Charming village by the serene pond_1.png',
         'assets/backgrounds/Ninja village with stone faces.png',
         'assets/backgrounds/Coastal town with aquatic gym.png',
         'assets/backgrounds/Mountain town with stone gym.png',
-      ];
-
-      for (final path in testFiles) {
-        try {
-          await rootBundle.load(path);
-          scanned.add(path);
-        } catch (e) {
-          // File doesn't exist
-        }
-      }
+      ]);
     }
 
     _defaultBackgrounds = scanned;
@@ -154,13 +151,11 @@ class BackgroundService extends ChangeNotifier {
         }
       } else {
         // It's an asset path
-        try {
-          await rootBundle.load(selected).timeout(const Duration(seconds: 2));
+        if (_isBundledBackgroundPath(selected)) {
           _currentBackground = selected;
           return selected;
-        } catch (e) {
-          print('Asset not found or timed out: $selected');
         }
+        print('Selected background is not a bundled background: $selected');
       }
     }
 
@@ -170,10 +165,11 @@ class BackgroundService extends ChangeNotifier {
         const Duration(seconds: 3),
       );
       if (defaults.isNotEmpty) {
-        // Auto-select first background on first boot
-        if (selected == null || selected.isEmpty) {
-          await setDefaultBackground(defaults.first);
-        }
+        // Auto-select or repair fallback so first boot and stale settings
+        // both have a concrete background ready for AppShell.
+        await _prefs?.setString(_defaultBackgroundKey, defaults.first);
+        _currentBackground = defaults.first;
+        notifyListeners();
         return defaults.first;
       }
     } catch (e) {
@@ -233,15 +229,7 @@ class BackgroundService extends ChangeNotifier {
     final List<String> backgrounds = [];
 
     // Add default asset backgrounds (try each one individually)
-    for (final bgPath in _defaultBackgrounds) {
-      try {
-        await rootBundle.load(bgPath).timeout(const Duration(seconds: 1));
-        backgrounds.add(bgPath);
-      } catch (e) {
-        // Asset doesn't exist or timed out, skip it
-        print('Background not found: $bgPath');
-      }
-    }
+    backgrounds.addAll(_defaultBackgrounds);
 
     // Add custom backgrounds from app directory
     final customBackgrounds =
@@ -262,20 +250,16 @@ class BackgroundService extends ChangeNotifier {
       return _cachedDefaultBackgrounds!;
     }
 
-    final List<String> validBackgrounds = [];
+    _cachedDefaultBackgrounds = List<String>.from(_defaultBackgrounds);
+    return _cachedDefaultBackgrounds!;
+  }
 
-    // Test each hardcoded background to see if it exists
-    for (final bgPath in _defaultBackgrounds) {
-      try {
-        await rootBundle.load(bgPath).timeout(const Duration(seconds: 1));
-        validBackgrounds.add(bgPath);
-      } catch (e) {
-        print('Background asset not found: $bgPath');
-      }
-    }
-
-    _cachedDefaultBackgrounds = validBackgrounds;
-    return validBackgrounds;
+  bool _isBundledBackgroundPath(String path) {
+    final lowerPath = path.toLowerCase();
+    return path.startsWith('assets/backgrounds/') &&
+        (lowerPath.endsWith('.png') ||
+            lowerPath.endsWith('.jpg') ||
+            lowerPath.endsWith('.jpeg'));
   }
 
   /// Set the default background

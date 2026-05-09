@@ -3,6 +3,7 @@ import 'dart:io';
 import '../models/book.dart';
 import '../services/book_service.dart';
 import '../services/epub_library_service.dart';
+import '../services/pdf_service.dart';
 import '../services/reading_stats_service.dart';
 import '../screens/reader_screen.dart';
 import '../theme.dart';
@@ -17,6 +18,7 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen> {
   final BookService _bookService = BookService();
   final EpubLibraryService _epubLibraryService = EpubLibraryService();
+  final PdfService _pdfService = PdfService();
   final ReadingStatsService _readingStatsService = ReadingStatsService();
   List<Book> _books = [];
   List<Book> _filteredBooks = [];
@@ -169,7 +171,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         ),
         content: Text(
           book.unsupportedReason ??
-              'This book format is not supported by Storytime Reader.',
+              'This book format is not supported by Nectar & Sol.',
           style: TextStyle(color: Colors.white.withOpacity(0.8)),
         ),
         actions: [
@@ -192,7 +194,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     });
 
     try {
-      final importedBook = await _epubLibraryService.importFromFilesystem();
+      final importedBook = await _showImportFormatDialog();
       if (!mounted) {
         return;
       }
@@ -213,7 +215,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       }
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Could not import EPUB: $e')));
+      ).showSnackBar(SnackBar(content: Text('Could not import book: $e')));
     } finally {
       if (mounted) {
         setState(() {
@@ -221,6 +223,42 @@ class _LibraryScreenState extends State<LibraryScreen> {
         });
       }
     }
+  }
+
+  Future<Book?> _showImportFormatDialog() async {
+    final format = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1F2E),
+        title: const Text('Import Book', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'Choose the file type to import.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'epub'),
+            child: const Text('EPUB'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'pdf'),
+            child: const Text('PDF'),
+          ),
+        ],
+      ),
+    );
+
+    if (format == 'pdf') {
+      return _pdfService.importFromFilesystem();
+    }
+    if (format == 'epub') {
+      return _epubLibraryService.importFromFilesystem();
+    }
+    return null;
   }
 
   Future<void> _deleteBook(Book book) async {
@@ -250,7 +288,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
       return;
     }
 
-    await _epubLibraryService.deleteBook(book);
+    if (book.isPdf) {
+      await _pdfService.deleteBook(book);
+    } else {
+      await _epubLibraryService.deleteBook(book);
+    }
     _bookService.invalidateCache();
     await _loadBooks(forceRefresh: true);
 

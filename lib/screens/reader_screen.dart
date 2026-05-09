@@ -35,6 +35,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
   int? _restoreTotalPagesHint;
   final GlobalKey<EpubJsReaderState> _epubReaderKey =
       GlobalKey<EpubJsReaderState>();
+  final GlobalKey<PdfBookViewState> _pdfReaderKey =
+      GlobalKey<PdfBookViewState>();
   int? _actualTotalPages; // Actual page count from EPUB
   List<Chapter> _epubChapters = const [];
   final CharacterService _characterService = CharacterService();
@@ -81,7 +83,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
     setState(() {
       _currentPage = widget.book.isEpub
           ? (savedPage < 0 ? 0 : savedPage)
-          : savedPage.clamp(0, widget.book.totalPages - 1);
+          : savedPage.clamp(
+              0,
+              ((widget.book.isPdf ? savedTotalPagesHint : null) ??
+                      widget.book.totalPages) -
+                  1,
+            );
       _fontSize = savedFontSize;
       _viewMode = savedViewMode ? PageViewMode.spread : PageViewMode.single;
       _isLoading = false;
@@ -177,7 +184,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Future<void> _persistKnownTotalPages() async {
-    if (!widget.book.isEpub) {
+    if (!widget.book.isEpub && !widget.book.isPdf) {
       await _prefs?.setInt(
         '${_getBookKey()}_page_count',
         widget.book.totalPages,
@@ -192,9 +199,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   int _getPageIndex(int logicalPage) {
-    if (_viewMode == PageViewMode.spread &&
-        !widget.book.isEpub &&
-        !widget.book.isPdf) {
+    if (_viewMode == PageViewMode.spread && !widget.book.isEpub) {
       return logicalPage ~/ 2;
     }
     return logicalPage;
@@ -274,9 +279,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
     int logicalPage = pageIndex;
 
-    if (_viewMode == PageViewMode.spread &&
-        !widget.book.isEpub &&
-        !widget.book.isPdf) {
+    if (_viewMode == PageViewMode.spread && !widget.book.isEpub) {
       logicalPage = pageIndex * 2;
     }
 
@@ -322,6 +325,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
     if (widget.book.isEpub) {
       _epubReaderKey.currentState?.goToPage(targetPage + 1);
+    } else if (widget.book.isPdf) {
+      _pdfReaderKey.currentState?.goToPage(targetPage + 1);
     } else {
       // For image books, use PageController
       final pageIndex = _getPageIndex(targetPage);
@@ -345,6 +350,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (_currentPage < totalPages - 1) {
       if (widget.book.isEpub) {
         _epubReaderKey.currentState?.nextPage();
+      } else if (widget.book.isPdf) {
+        _pdfReaderKey.currentState?.nextPage();
       } else {
         _pageController.nextPage(
           duration: const Duration(milliseconds: 300),
@@ -362,6 +369,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (_currentPage > 0) {
       if (widget.book.isEpub) {
         _epubReaderKey.currentState?.prevPage();
+      } else if (widget.book.isPdf) {
+        _pdfReaderKey.currentState?.prevPage();
       } else {
         _pageController.previousPage(
           duration: const Duration(milliseconds: 300),
@@ -394,6 +403,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   bool get _hasReliableProgressTotal {
+    if (widget.book.isPdf) {
+      return _actualTotalPages != null && _actualTotalPages! > 1;
+    }
+
     if (!widget.book.isEpub) {
       return widget.book.totalPages > 0;
     }
@@ -420,12 +433,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   String get _pageDisplayText {
+    final effectiveTotalPages = _actualTotalPages ?? _restoreTotalPagesHint;
     if (!widget.book.isEpub) {
-      final currentDisplay = _currentPage + 1;
-      return '$currentDisplay / ${widget.book.totalPages}';
+      final totalPages = effectiveTotalPages ?? widget.book.totalPages;
+      final currentDisplay = (_currentPage + 1).clamp(1, totalPages);
+      if (_viewMode == PageViewMode.spread) {
+        final rightPage = (_currentPage + 2).clamp(1, totalPages);
+        if (rightPage > currentDisplay) {
+          return '$currentDisplay-$rightPage / $totalPages';
+        }
+      }
+      return '$currentDisplay / $totalPages';
     }
 
-    final effectiveTotalPages = _actualTotalPages ?? _restoreTotalPagesHint;
     if (effectiveTotalPages == null || effectiveTotalPages <= 0) {
       return '... / ...';
     }
@@ -667,9 +687,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
       return;
     }
 
-    final totalPages = widget.book.isEpub
-        ? _actualTotalPages!
-        : widget.book.totalPages;
+    if ((widget.book.isEpub || widget.book.isPdf) &&
+        _actualTotalPages == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please wait for the book to fully load...'),
+          backgroundColor: AppTheme.darkBlueMid,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final totalPages = _displayedTotalPages;
     int selectedPage = _currentPage + 1;
 
     showDialog(
@@ -834,11 +864,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
                             onSafeRegionsChanged: widget.book.isEpub
                                 ? _onSafeRegionsChanged
                                 : null,
-                            onTotalPagesChanged: widget.book.isEpub
+                            onTotalPagesChanged:
+                                (widget.book.isEpub || widget.book.isPdf)
                                 ? _onTotalPagesChanged
                                 : null,
                             epubReaderKey: widget.book.isEpub
                                 ? _epubReaderKey
+                                : null,
+                            pdfReaderKey: widget.book.isPdf
+                                ? _pdfReaderKey
                                 : null,
                             restorePageHint: widget.book.isEpub
                                 ? _restorePageHint
